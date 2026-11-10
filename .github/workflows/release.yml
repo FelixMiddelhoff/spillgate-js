@@ -1,0 +1,65 @@
+name: release
+
+# Publishes to npm with provenance. Runs only for a tag like v0.1.0 that the maintainer pushes:
+# builds once, checks that the tag equals the package version, runs the whole suite, packs, and
+# publishes the same tarball from a protected environment. With npm trusted publishing (OIDC)
+# no token is stored; see RELEASING.md for the one-time setup and the first release.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24" }
+      - run: npm ci
+      - name: the tag must equal the package version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != version $version"; exit 1; }
+      - run: npm test
+      - run: npm run spectrace
+      - run: npm pack
+      - name: the tarball works in a clean project
+        run: |
+          mkdir /tmp/consumer && cd /tmp/consumer && npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/spillgate-*.tgz
+          node --input-type=module -e "import { decodeAll } from 'spillgate'; import { gzipSync } from 'node:zlib'; console.log(Buffer.from(await decodeAll(gzipSync('ok'), 'gzip', { maxOutput: 100 })).toString());"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: spillgate-*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # The environment "npm" is created in the repository settings and requires the maintainer's
+    # approval before this job runs.
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/spillgate
+    permissions:
+      contents: read
+      id-token: write # OIDC: provenance, and trusted publishing once configured on npmjs.com
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: package/
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: publish the tarball that was tested
+        run: npm publish package/spillgate-*.tgz --provenance --access public
+        env:
+          # Empty once trusted publishing is configured; only the first release may need a token.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

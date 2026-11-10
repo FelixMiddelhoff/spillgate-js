@@ -20,6 +20,7 @@
 export { Decoder, decodeAll, reader } from "./decoder.js";
 export type { DecoderOptions, ReaderOptions } from "./decoder.js";
 export { SpillgateReader } from "./reader.js";
+export { statusFor } from "./status.js";
 export type { Codec, CodecReader, Source as CodecSource } from "./codec.js";
 export type { Source, PullSource } from "./source.js";
 export {

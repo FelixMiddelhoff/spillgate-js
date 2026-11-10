@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["20", "22", "24"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "${{ matrix.node }}" }
+      - run: npm ci
+      - name: build, then all tests (conformance vectors, differential, memory)
+        run: npm test
+
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24" }
+      - run: npm ci
+      - run: npx tsc --noEmit -p tsconfig.json
+      - run: npm run build
+      - name: every rule of the specification is covered
+        run: npm run spectrace
+      - name: known vulnerabilities in dependencies
+        run: npm audit --audit-level=low
+      - name: the package contents and a clean install
+        run: |
+          npm pack --dry-run
+          npm pack
+          mkdir /tmp/consumer && cd /tmp/consumer && npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/spillgate-*.tgz
+          node --input-type=module -e "import { decodeAll } from 'spillgate'; import { gzipSync } from 'node:zlib'; const out = await decodeAll(gzipSync('wheel ok'), 'gzip', { maxOutput: 100 }); console.log(Buffer.from(out).toString());"

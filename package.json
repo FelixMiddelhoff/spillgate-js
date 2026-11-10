@@ -18,7 +18,7 @@
   "files": ["dist/src", "README.md", "LICENSE", "CHANGELOG.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test --test-reporter=spec \"dist/tests/**/*.test.js\"",
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
     "spectrace": "node dist/tools/spectrace.js"
   },
   "dependencies": {},

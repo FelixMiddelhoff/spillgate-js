@@ -1,0 +1,26 @@
+name: nightly-fuzz
+
+# Property and differential tests with a much larger budget than the pull-request run.
+on:
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24" }
+      - run: npm ci
+      - run: npm run build
+      - name: properties with a large budget
+        run: node --test dist/tests/fuzz.test.js
+        env:
+          SPILLGATE_FUZZ_ROUNDS: "20000"
