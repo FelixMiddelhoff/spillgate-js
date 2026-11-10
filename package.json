@@ -1,0 +1,29 @@
+{
+  "name": "spillgate",
+  "version": "0.1.0-dev.0",
+  "description": "Decode untrusted compressed data with mandatory limits (decompression-bomb gate).",
+  "keywords": ["gzip", "deflate", "brotli", "zstd", "decompression-bomb", "security", "content-encoding"],
+  "license": "MIT",
+  "author": "Felix Middelhoff",
+  "repository": { "type": "git", "url": "git+https://github.com/FelixMiddelhoff/spillgate-js.git" },
+  "homepage": "https://github.com/FelixMiddelhoff/spillgate-js#readme",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "sideEffects": false,
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" }
+  },
+  "files": ["dist/src", "README.md", "LICENSE", "CHANGELOG.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test --test-reporter=spec \"dist/tests/**/*.test.js\"",
+    "spectrace": "node dist/tools/spectrace.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9"
+  }
+}
