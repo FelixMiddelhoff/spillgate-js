@@ -2,6 +2,10 @@
 
 Versions below 1.0 may still change the API.
 
+## 0.1.3 - 2026-11-11
+
+- `spillgate` (gzip, deflate): DEFLATE decoding tables are built with a small root table (10 bits for literals and lengths, 8 for distances) and a canonical slow path for the rare longer codes. Before, every dynamic block rebuilt tables of up to 32768 entries, so a stream of many empty blocks with 15-bit codes cost seconds of CPU per few megabytes while producing no output (the ratio and output limits cannot fire on that). Building is now O(symbols), about 20 times cheaper on that worst case (200000 empty blocks: 11 s to 0.55 s), ordinary decoding is as fast as before, and the decoder state shrinks from about 160 KiB to about 50 KiB. Found by the review of the Rust port.
+
 ## 0.1.2 - 2026-11-11
 
 Fixes found by the independent review of the Rust port, which differential-fuzzed the same algorithms.
