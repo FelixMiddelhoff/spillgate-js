@@ -17,8 +17,9 @@ try {
 }
 ```
 
-- `Content-Encoding` chains: `gzip` (and `x-gzip`), `deflate`, `identity`. Brotli and zstd are
-  not part of this version (see "What it does not cover").
+- `Content-Encoding` chains: `gzip` (and `x-gzip`), `deflate`, `identity`. `br` and `zstd` come
+  from the optional packages `spillgate-br` (brotli-dec-wasm, pinned) and `spillgate-zstd` (own
+  bounded decoder); pass them via `new Decoder(limits, { codecs: { br: ..., zstd: ... } })`.
 - `maxOutput` is required. There is no unlimited setting.
 - Every layer is limited, including the intermediate layers of a chain.
 - Expansion ratio and chain length are limited by default.
@@ -96,7 +97,7 @@ interrupt one step inside the decoder; the limits bound the work there.
 
 ## What it does not cover
 
-Brotli and zstd (planned as separate optional packages; the codec interface exists), archives (zip,
+Archives (zip,
 tar), bounding the compressed input (use `maxInput` or your server's body limit), connection
 timeouts, encrypted content. `fetch` decodes `Content-Encoding` itself before you see the body; see
 [docs/how-to.md](docs/how-to.md) for what that means. See [docs/memory.md](docs/memory.md) for the
