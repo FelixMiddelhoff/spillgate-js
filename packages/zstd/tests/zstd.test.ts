@@ -321,3 +321,20 @@ test("Covers: SG-R-RAT-02 SG-R-MEM-02 - compressed blocks with tiny output do no
   assert.equal(kind, "ok");
   assert.ok(performance.now() - started < 10_000, `${performance.now() - started} ms`);
 });
+
+test("Covers: SG-R-CDC-05 - a compressed block without sequences must end after the count byte", async () => {
+  // Found by the differential bit-flip test of the Rust port: libzstd refuses trailing bytes here.
+  const blockHeader = (last: number, type: number, size: number): Buffer => {
+    const v = (size << 3) | (type << 1) | last;
+    return Buffer.from([v & 255, (v >> 8) & 255, (v >> 16) & 255]);
+  };
+  const literals = Buffer.concat([Buffer.from([(3 << 3) | 0]), Buffer.from("abc")]); // raw literals, size 3
+  const build = (tail: number[]): Buffer => {
+    const body = Buffer.concat([literals, Buffer.from([0x00, ...tail])]);
+    return Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x58]), blockHeader(1, 2, body.length), body]);
+  };
+  assert.deepEqual(await run(build([])), ["ok", Buffer.from("abc")]);
+  assert.equal((await run(build([0x01])))[0], "corrupt");
+  assert.equal((await run(build([0, 0, 0])))[0], "corrupt");
+  assert.equal(oracle(build([0x01])), undefined);
+});

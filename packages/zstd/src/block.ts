@@ -227,7 +227,9 @@ export class FrameBody {
     const b0 = section[at++] as number;
     let count: number;
     if (b0 === 0) {
-      this.push(literals); // no sequences: the literals are the whole block
+      // No sequences: the literals are the whole block, and nothing may follow the count byte.
+      if (section.length !== 1) throw new CorruptError("zstd: bytes follow a sequences section without sequences");
+      this.push(literals);
       return literals;
     } else if (b0 < 128) {
       count = b0;
