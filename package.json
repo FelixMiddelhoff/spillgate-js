@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "npm run build -w spillgate-test-support && npm run build -w spillgate && npm run build -w spillgate-br && npm run build -w spillgate-zstd --if-present && npm run build -w spillgate-integration",

@@ -26,7 +26,7 @@ try {
 - Unknown, malformed or too deep `Content-Encoding` headers are refused, never passed through.
 - No dependencies. Written in TypeScript, ESM only, types included.
 - Uses only standard APIs (`Uint8Array`, `ReadableStream`, `AbortSignal`), no Node-specific
-  module. Tested on Node 20, 22 and 24.
+  module. Tested on Node 22 and 24 (Node 20 is end of life).
 
 This is the TypeScript implementation of the language-neutral
 [spillgate specification](https://github.com/FelixMiddelhoff/spillgate/blob/main/spec/SPEC.md).
