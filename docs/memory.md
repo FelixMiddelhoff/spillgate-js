@@ -30,3 +30,8 @@ The optional codecs add their decoder window, bounded by the window cap of the c
 
 The cap is checked from the header before anything is allocated; the tests measure that a hostile
 header allocates nothing and that a 1 GiB bomb decodes with constant memory.
+
+`spillgate-br` shares one WebAssembly module between all open streams. Its memory grows with the
+streams open at the same time (up to about the window cap each) and does not shrink. When it runs
+out, the stream fails as `memory_limit`. Bound the number of concurrent brotli streams in your
+service (for example 16 MiB window x 64 streams is about 1 GiB) or lower `maxWindowBits`.

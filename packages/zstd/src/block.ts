@@ -46,8 +46,13 @@ export class FrameBody {
   /** Bytes regenerated so far in this frame. */
   total = 0;
 
-  private readonly window: Uint8Array;
+  /** Grows with the output up to `windowSize`, so a frame that produces little costs little. */
+  private window: Uint8Array = new Uint8Array(0);
   private windowPos = 0;
+  /** The ring size. The array may be shorter until the output has filled it; positions wrap here, not at its length. */
+  private get ring(): number {
+    return Math.max(this.windowSize, 1);
+  }
   private repeat: [number, number, number] = [1, 4, 8];
   private huffman: HuffmanTable | undefined;
   private ll: FseTable | undefined;
@@ -57,8 +62,23 @@ export class FrameBody {
   /**
    * @param windowSize the window the frame declared (already checked against the cap)
    */
-  constructor(private readonly windowSize: number) {
-    this.window = new Uint8Array(Math.max(windowSize, 1));
+  constructor(
+    private readonly windowSize: number,
+    /** Output scratch shared by the frames of one reader (BLOCK_MAX bytes), so a block never zero-fills a new one. */
+    private readonly scratch: Uint8Array = new Uint8Array(BLOCK_MAX),
+  ) {}
+
+  /**
+   * Make room for `extra` more bytes without allocating the declared window up front: a hostile
+   * header must not turn a few input bytes into a large zeroed allocation (SG-R-RAT-02). Until the
+   * window is full, nothing has wrapped, so the position equals the bytes produced.
+   */
+  private ensure(extra: number): void {
+    const target = Math.max(Math.min(this.windowSize, this.total + extra), 1);
+    if (this.window.length >= target) return;
+    const grown = new Uint8Array(Math.min(Math.max(this.windowSize, 1), Math.max(target, this.window.length * 2)));
+    grown.set(this.window);
+    this.window = grown;
   }
 
   /** Largest block this frame may contain: min(window, 128 KiB) (RFC 8878 3.1.1.2.3). */
@@ -78,17 +98,19 @@ export class FrameBody {
   }
 
   private push(bytes: Uint8Array): void {
+    this.ensure(bytes.length);
     const win = this.window;
     const n = win.length;
-    if (bytes.length >= n) {
+    if (bytes.length >= n && n === this.ring) {
+      // the newest n bytes fill the whole ring; the oldest of them sits at index 0
       win.set(bytes.subarray(bytes.length - n), 0);
-      this.windowPos = (this.windowPos + bytes.length) % n;
+      this.windowPos = 0;
     } else {
       const start = this.windowPos;
       const first = Math.min(bytes.length, n - start);
       win.set(bytes.subarray(0, first), start);
       win.set(bytes.subarray(first), 0);
-      this.windowPos = (start + bytes.length) % n;
+      this.windowPos = (start + bytes.length) % this.ring;
     }
     this.total += bytes.length;
   }
@@ -254,11 +276,12 @@ export class FrameBody {
     let mlState = bits.read(ml.accuracyLog);
 
     const limit = this.blockMax;
-    const out = new Uint8Array(limit);
+    this.ensure(limit);
+    const out = this.scratch;
     let outPos = 0;
     let litPos = 0;
     const win = this.window;
-    const n = win.length;
+    const n = this.ring;
     let wpos = this.windowPos;
     let produced = this.total; // bytes of this frame before this block, for offset validation
 

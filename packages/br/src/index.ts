@@ -117,7 +117,12 @@ class BrotliReader implements CodecReader {
       let result: wasm.BrotliStreamResult;
       try {
         result = stream.decompress(view, outputSize);
-      } catch {
+      } catch (error) {
+        // A trap or an out-of-range allocation inside WebAssembly is memory running out (the
+        // module's memory is shared by all open streams and never shrinks), not bad data.
+        if (error instanceof WebAssembly.RuntimeError || error instanceof RangeError) {
+          throw new MemoryLimitError("brotli: the WebAssembly decoder ran out of memory");
+        }
         throw new CorruptError("brotli: invalid data");
       }
       let output: Uint8Array;

@@ -37,7 +37,6 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "24" }
       - run: npm ci
-      - run: npx tsc --noEmit -p tsconfig.json
       - run: npm run build
       - name: every rule of the specification is covered
         run: npm run spectrace

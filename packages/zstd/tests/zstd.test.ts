@@ -298,3 +298,26 @@ test("Covers: SG-R-RAT-02 SG-R-MEM-02 - frames without output cost bounded CPU p
   assert.ok(performance.now() - started < 10_000, `${performance.now() - started} ms`);
   assert.equal((await run(stream, { maxOutput: 100, disableRatioLimit: true, maxInput: stream.length >> 1 }))[0], "input_limit");
 });
+
+test("Covers: SG-R-CDC-05 - a block as large as the window keeps the ring consistent for later matches", async () => {
+  // Found by the independent review: after a block of exactly the window size the write position must be 0.
+  const blockHeader = (last: number, type: number, size: number): Buffer => {
+    const v = (size << 3) | (type << 1) | last;
+    return Buffer.from([v & 255, (v >> 8) & 255, (v >> 16) & 255]);
+  };
+  const big = Buffer.from(Array.from({ length: 1024 }, (_, i) => (i * 13 + 7) & 255));
+  const sequence = Buffer.from([0x00, 0x01, 0x00, 0, 0, 2]);
+  const frame = Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00]), blockHeader(0, 0, 3), Buffer.from("XYZ"), blockHeader(0, 0, 1024), big, blockHeader(1, 2, sequence.length), sequence]);
+  const [kind, out] = await run(frame);
+  assert.equal(kind, "ok");
+  assert.ok(out.equals(zlib.zstdDecompressSync(frame)));
+});
+
+test("Covers: SG-R-RAT-02 SG-R-MEM-02 - compressed blocks with tiny output do not cost a full block each", async () => {
+  const block = Buffer.from(compress(Buffer.from("abcabcabc")));
+  const stream = Buffer.concat(Array<Buffer>(30_000).fill(block));
+  const started = performance.now();
+  const [kind] = await run(stream, { maxOutput: 2 ** 30, disableRatioLimit: true });
+  assert.equal(kind, "ok");
+  assert.ok(performance.now() - started < 10_000, `${performance.now() - started} ms`);
+});

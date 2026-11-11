@@ -25,6 +25,7 @@ export class ZstdReader implements CodecReader {
   private buffer: Uint8Array = EMPTY;
   private pos = 0;
   private deferred: SpillgateError | undefined;
+  private readonly scratch = new Uint8Array(BLOCK_MAX);
 
   constructor(
     private readonly meter: CodecSource,
@@ -107,7 +108,7 @@ export class ZstdReader implements CodecReader {
     if (window > this.maxWindow) {
       throw new MemoryLimitError(`zstd frame asks for a window of ${window} bytes (the cap is ${this.maxWindow})`);
     }
-    this.body = new FrameBody(window);
+    this.body = new FrameBody(window, this.scratch);
     this.hasher = checksum ? new XXH64() : undefined;
   }
 
