@@ -2,6 +2,11 @@
 
 Versions below 1.0 may still change the API.
 
+## 0.1.1 - 2026-11-11
+
+- `spillgate-zstd`: a compressed block without sequences must end right after the sequence count byte; bytes after it are now `corrupt` (they were skipped before; libzstd refuses them). Found by differential testing for the Rust port.
+- `spillgate-zstd`: the window grows with the output and one scratch buffer serves all blocks (a frame that produces little no longer costs a full window), the window ring stays consistent after a block as large as the window, and brotli out-of-memory in WebAssembly is reported as `memory_limit` instead of `corrupt`. These were found in the review before 0.1.0 was tagged and are part of 0.1.0 already; listed here for completeness.
+
 ## 0.1.0 - 2026-11-11
 
 First version. The TypeScript implementation of the spillgate specification.
