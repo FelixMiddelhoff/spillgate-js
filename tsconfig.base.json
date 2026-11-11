@@ -3,9 +3,10 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022", "DOM"],
-    "outDir": "dist",
-    "rootDir": ".",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "declaration": true,
     "sourceMap": true,
     "strict": true,
@@ -16,7 +17,8 @@
     "noImplicitReturns": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-    "types": ["node"]
-  },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "tools/**/*.ts"]
+    "types": [
+      "node"
+    ]
+  }
 }

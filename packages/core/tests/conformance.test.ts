@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { Decoder, SpillgateError, type Limits, type PullSource } from "../src/index.js";
 import { NotImplemented, generate, sha256Hex, type GeneratorSpec } from "./corpus.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const MANIFEST = JSON.parse(readFileSync(join(ROOT, "conformance", "manifest.json"), "utf8")) as Manifest;
 
 interface Expect {

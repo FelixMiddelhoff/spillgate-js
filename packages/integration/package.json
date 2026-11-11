@@ -1,0 +1,16 @@
+{
+  "name": "spillgate-integration",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Runs the whole conformance corpus with every codec installed.",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\""
+  },
+  "dependencies": {
+    "spillgate": "0.1.0-dev.0",
+    "spillgate-br": "0.1.0-dev.0",
+    "spillgate-zstd": "0.1.0-dev.0"
+  }
+}

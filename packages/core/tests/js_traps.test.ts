@@ -10,11 +10,13 @@ import vm from "node:vm";
 import { Decoder, OutputLimitError, SpillgateError, decodeAll, reader } from "../src/index.js";
 import { LOOSE, Trickle, gz, outcome } from "./helpers.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const SRC = join(ROOT, "src");
-const sources = readdirSync(SRC).filter((f) => f.endsWith(".js")).map((f) => ({ name: f, text: readFileSync(join(SRC, f), "utf8") }));
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+const CORE = join(ROOT, "packages", "core");
+const SRC = join(CORE, "src");
+const sources = readdirSync(SRC).filter((f) => f.endsWith(".ts")).map((f) => ({ name: f, text: readFileSync(join(SRC, f), "utf8") }));
 
 test("Covers: SG-I-04 SG-R-CDC-07 - no unbounded platform decompression API is used", () => {
+  assert.ok(sources.length >= 10, "the scan must actually read the source files");
   // node:zlib streams and DecompressionStream cannot bound the output of one write, cannot report
   // the input they used and treat bytes after the stream differently per engine; the convenience
   // methods only honor maxOutputLength for one-shot calls. spillgate decodes DEFLATE itself.
@@ -26,7 +28,7 @@ test("Covers: SG-I-04 SG-R-CDC-07 - no unbounded platform decompression API is u
 });
 
 test("Covers: SG-I-04 - the package has no runtime dependencies and no side effects at import", () => {
-  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { dependencies?: object; sideEffects?: boolean };
+  const pkg = JSON.parse(readFileSync(join(CORE, "package.json"), "utf8")) as { dependencies?: object; sideEffects?: boolean };
   assert.deepEqual(Object.keys(pkg.dependencies ?? {}), []);
   assert.equal(pkg.sideEffects, false);
   for (const { name, text } of sources) {

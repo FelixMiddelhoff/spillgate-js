@@ -1,0 +1,46 @@
+{
+  "name": "spillgate-br",
+  "version": "0.1.0-dev.0",
+  "description": "Brotli for spillgate: bounded steps, window cap, large-window refusal, exact input accounting.",
+  "keywords": [
+    "brotli",
+    "spillgate",
+    "decompression-bomb",
+    "security"
+  ],
+  "license": "MIT",
+  "author": "Felix Middelhoff",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FelixMiddelhoff/spillgate-js.git",
+    "directory": "packages/br"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\""
+  },
+  "dependencies": {
+    "brotli-dec-wasm": "2.3.2"
+  },
+  "peerDependencies": {
+    "spillgate": "0.1.0-dev.0"
+  }
+}

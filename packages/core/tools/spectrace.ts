@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const RULE = /SG-(?:R-[A-Z]+-[0-9]{2}|I-[0-9]{2})/g;
 const DEFINITION = /^(?:- )?\*\*(SG-(?:R-[A-Z]+-[0-9]{2}|I-[0-9]{2}))\*\*/gm;
 
@@ -24,7 +24,7 @@ const manifest = JSON.parse(readFileSync(join(root, "conformance", "manifest.jso
 };
 const covered = new Set<string>(manifest.vectors.flatMap((v) => v.rules));
 
-const testDir = join(root, "tests");
+const testDir = join(root, "packages", "core", "tests");
 for (const file of readdirSync(testDir).filter((f) => f.endsWith(".test.ts"))) {
   const text = readFileSync(join(testDir, file), "utf8");
   for (const title of text.matchAll(/test\(\s*[`"']Covers:([^`"'\n]*)/g)) {
