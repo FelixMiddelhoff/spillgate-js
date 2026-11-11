@@ -2,6 +2,10 @@
 
 Versions below 1.0 may still change the API.
 
+## Unreleased
+
+- `maxInput` (SG-R-INP-01, corpus 0.2.0): only taking the byte after `maxInput` is `input_limit`; looking at it is not. A complete stream of exactly `maxInput` bytes followed by more data is now `corrupt` (gzip, deflate, brotli, zstd: trailing data, as without a limit), where it used to be `input_limit`. A codec that needs the byte after the limit to go on still ends in `input_limit` (the count of consumed bytes is checked at the end of every codec step); only a source that really ends there is a truncated stream (`corrupt`). Identity keeps the strict behavior. A byte that could start another gzip member (0x1f) or zstd frame (0x28, 0x50..0x5f) is taken, so it is `input_limit` at `maxInput` = stream length. Conformance corpus 0.2.0 (vectors SG-V-BND-0041 to 0057) is included.
+
 ## 0.1.3 - 2026-11-11
 
 - `spillgate` (gzip, deflate): DEFLATE decoding tables are built with a small root table (10 bits for literals and lengths, 8 for distances) and a canonical slow path for the rare longer codes. Before, every dynamic block rebuilt tables of up to 32768 entries, so a stream of many empty blocks with 15-bit codes cost seconds of CPU per few megabytes while producing no output (the ratio and output limits cannot fire on that). Building is now O(symbols), about 20 times cheaper on that worst case (200000 empty blocks: 11 s to 0.55 s), ordinary decoding is as fast as before, and the decoder state shrinks from about 160 KiB to about 50 KiB. Found by the review of the Rust port.

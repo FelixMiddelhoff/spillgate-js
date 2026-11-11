@@ -101,13 +101,23 @@ export class LayerGuard implements Readable {
   /** One codec read, with its failures contained (SG-R-CDC-08). */
   private async callCodec(max: number): Promise<Uint8Array> {
     try {
-      const data: unknown = await this.codec.read(max);
+      let data: unknown;
+      try {
+        data = await this.codec.read(max);
+      } catch (error) {
+        this.meter.checkTaken();
+        throw error;
+      }
       if (!(data instanceof Uint8Array)) {
         throw new InternalError(`codec returned ${data === null ? "null" : typeof data}, not bytes`, { layer: this.layer });
       }
       if (data.length > max) {
         throw new InternalError("codec returned more bytes than requested", { layer: this.layer });
       }
+      // End of the codec step: a codec that took the byte after maxInput has violated SG-R-INP-01,
+      // whatever it returned (data, the end or corruption). The violation came before this
+      // step's output.
+      this.meter.checkTaken();
       return data;
     } catch (error) {
       this.done = this.classify(error);

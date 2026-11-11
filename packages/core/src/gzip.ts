@@ -75,7 +75,13 @@ class GzipReader implements CodecReader {
         if (await this.meter.fill()) view = this.meter.view();
         else ended = true;
       }
-      const status = inflater.step(view, out);
+      let status;
+      try {
+        status = inflater.step(view, out);
+      } catch (error) {
+        this.meter.advance(inflater.used); // the bytes it looked at before failing were taken (SG-R-INP-01)
+        throw error;
+      }
       this.meter.advance(inflater.used);
       if (status === DONE) {
         this.meter.unread(inflater.leftover()); // the trailer starts at the first unused byte
@@ -112,7 +118,8 @@ class GzipReader implements CodecReader {
     if (!first) {
       const probe = await this.meter.take(1);
       if (probe.length === 0) return false;
-      this.meter.unread(probe);
+      this.meter.unread(probe); // only looked at: trailing data is not taken (SG-R-INP-01)
+      if (probe[0] !== ID1) throw new CorruptError("gzip: invalid header");
     }
     const fixed = await this.meter.takeExact(FIXED_HEADER, "gzip header");
     if (fixed[0] !== ID1 || fixed[1] !== ID2 || fixed[2] !== CM_DEFLATE) {

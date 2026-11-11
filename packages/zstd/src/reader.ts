@@ -62,6 +62,12 @@ export class ZstdReader implements CodecReader {
       if (this.frames > 0) return false;
       throw new CorruptError("zstd: an empty input is not a zstd stream");
     }
+    const byte = first[0] as number;
+    if (this.frames > 0 && byte !== (FRAME_MAGIC & 0xff) && (byte & 0xf0) !== (SKIPPABLE_MAGIC & 0xf0)) {
+      // Cannot start another frame: trailing data. The byte was only looked at, not taken (SG-R-INP-01).
+      this.meter.unread(first);
+      throw new CorruptError("zstd: data that is not a zstd frame follows the stream");
+    }
     const rest = await this.meter.takeExact(3, "zstd magic number");
     const full = (first[0] as number) | ((rest[0] as number) << 8) | ((rest[1] as number) << 16) | ((rest[2] as number) * 2 ** 24);
     if ((full >>> 0) === FRAME_MAGIC) {

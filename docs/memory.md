@@ -5,7 +5,7 @@ lengths in the stream). What it does allocate is bounded by constants:
 
 | Part | Bound |
 | --- | --- |
-| Input meter buffer, per layer | 4 KiB fetched at a time from a pull source; a chunk the producer yields (stream, iterable) is held until used |
+| Input meter buffer, per layer | 4 KiB fetched at a time from a pull source (with `maxInput`, never more than `maxInput + 1` bytes in total); a chunk the producer yields (stream, iterable) is held until used |
 | One decode step, per layer | 64 KiB (`MAX_STEP`), whatever buffer size the caller reads with |
 | DEFLATE decoder state (gzip, deflate), per layer | about 50 KiB: 32 KiB window and small two-level code tables (about 2 KiB each) |
 | gzip header fields | read in pieces of at most 512 bytes; FNAME and FCOMMENT are refused above 512 bytes |

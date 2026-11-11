@@ -85,6 +85,12 @@ endpoints. Chains of more than 16 elements are refused whatever you set.
 If the compressed size is not already bounded by your server, framework or broker, add `maxInput`.
 spillgate bounds the output; it is not a substitute for limiting how many bytes you accept.
 
+`maxInput` counts the bytes a codec takes from the source, and only for the first layer. A stream that
+fits in `maxInput` bytes is fine even if the source holds more behind it: extra data after a complete
+gzip, deflate, brotli or zstd stream is `corrupt` (not `input_limit`), and spillgate never requests
+more than `maxInput + 1` bytes from the source. `input_limit` means the stream needs more than
+`maxInput` bytes; a stream cut at the limit whose source really ends is `corrupt` (truncated).
+
 ## 3. Wire it in
 
 Create one `Decoder` at start-up and share it. It is immutable and safe to share; each reader it

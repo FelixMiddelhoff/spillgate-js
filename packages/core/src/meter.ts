@@ -8,7 +8,8 @@
  *   read-ahead buffer never gives free ratio credit (SG-R-RAT-02);
  * - lets a codec hand back bytes it took but did not need ({@link InputMeter.unread}), which also
  *   lowers the count again;
- * - enforces the optional `maxInput` cap (SG-R-INP-01, INP-02);
+ * - enforces the optional `maxInput` cap (SG-R-INP-01, INP-02): a codec may look at the byte after
+ *   the cap, taking it is `input_limit`;
  * - defends against misbehaving sources: one that makes no progress is `internal`
  *   (SG-R-RDR-03), one that throws is `source_error` (SG-R-RDR-05).
  */
@@ -60,16 +61,38 @@ export class InputMeter {
 
   /**
    * The buffered bytes, limited to what `maxInput` still allows. Take them with {@link advance}.
-   * Throws if the allowance is used up and a further byte exists (the probe byte, SG-R-INP-01).
+   *
+   * Codecs see the byte after the limit (the probe, SG-R-INP-01) as a view of its own, one byte
+   * long and never together with earlier bytes: looking at it is not taking it. Only what
+   * {@link advance} consumed counts, and the layer guard compares that with `maxInput` at the end
+   * of every codec step ({@link checkTaken}). A codec that finds trailing data behind a complete
+   * stream hands the probe back with {@link unread}. Once the probe was taken and not given back,
+   * further views throw `input_limit`.
+   *
+   * With `strict` (identity layers, whose bytes are all passed on) the probe is never handed out:
+   * the view throws if the allowance is used up and a further byte exists.
    */
-  view(): Uint8Array {
+  view(strict = false): Uint8Array {
     if (this.failure) throw this.failure;
     const available = this.buf.length - this.pos;
     if (available === 0) return EMPTY;
     if (this.maxInput === 0) return this.buf.subarray(this.pos);
     const allowance = this.maxInput - this._consumed;
-    if (allowance <= 0) throw this.fail(new InputLimitError(`the stream needs more than ${this.maxInput} input bytes`, { layer: this.layer, limit: this.maxInput }));
+    if (allowance < 0 || (strict && allowance === 0)) throw this.fail(this.limitError());
+    if (allowance === 0) return this.buf.subarray(this.pos, this.pos + 1); // the probe, alone
     return this.buf.subarray(this.pos, this.pos + Math.min(available, allowance));
+  }
+
+  /**
+   * The end-of-step check of SG-R-INP-01: throws `input_limit` if the codec has taken the
+   * `maxInput + 1`-th byte and not given it back, whatever else its step returned or threw.
+   */
+  checkTaken(): void {
+    if (this.maxInput > 0 && this._consumed > this.maxInput) throw this.fail(this.limitError());
+  }
+
+  private limitError(): InputLimitError {
+    return new InputLimitError(`the stream needs more than ${this.maxInput} input bytes`, { layer: this.layer, limit: this.maxInput });
   }
 
   /** Mark `n` bytes of the current view as taken. */
@@ -89,7 +112,7 @@ export class InputMeter {
     if (this.signal?.aborted) throw this.fail(new CanceledError("canceled by the caller", { layer: this.layer, cause: this.signal.reason }));
     const want = this.fetchSize();
     if (want < 1) {
-      throw this.fail(new InputLimitError(`the stream needs more than ${this.maxInput} input bytes`, { layer: this.layer, limit: this.maxInput }));
+      throw this.fail(this.limitError());
     }
     for (let attempt = 0; attempt < MAX_EMPTY_READS; attempt++) {
       const chunk = await this.readSource(want);
@@ -110,10 +133,10 @@ export class InputMeter {
   }
 
   /** Return up to `n` bytes; an empty array means the source has ended cleanly. */
-  async take(n: number): Promise<Uint8Array> {
+  async take(n: number, strict = false): Promise<Uint8Array> {
     if (n <= 0) return EMPTY;
     if (!(await this.fill())) return EMPTY;
-    const view = this.view();
+    const view = this.view(strict);
     const chunk = view.subarray(0, Math.min(n, view.length));
     this.advance(chunk.length);
     return chunk;

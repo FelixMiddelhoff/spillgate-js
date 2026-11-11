@@ -89,7 +89,13 @@ class DeflateReader implements CodecReader {
         if (await this.meter.fill()) view = this.meter.view();
         else ended = true;
       }
-      const status = inflater.step(view, out);
+      let status;
+      try {
+        status = inflater.step(view, out);
+      } catch (error) {
+        this.meter.advance(inflater.used); // the bytes it looked at before failing were taken (SG-R-INP-01)
+        throw error;
+      }
       this.meter.advance(inflater.used);
       if (status === DONE) {
         this.meter.unread(inflater.leftover());

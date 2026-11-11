@@ -155,7 +155,7 @@ export class Decoder {
 }
 
 function passthrough(meter: InputMeter): CodecReader {
-  return { read: (max) => meter.take(max) };
+  return { read: (max) => meter.take(max, true) } // strict: identity passes every byte it takes;
 }
 
 /** Shorthand for `new Decoder(limits, options).reader(source, encodings)`. */
