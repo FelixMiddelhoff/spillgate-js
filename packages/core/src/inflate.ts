@@ -10,7 +10,7 @@
  * final block it can hand back every whole byte it did not need (the trailer of a gzip or zlib
  * stream starts there).
  *
- * Memory: a 32 KiB window and three code tables, about 130 KiB, whatever the data.
+ * Memory: a 32 KiB window and three code tables, about 40 KiB, whatever the data.
  */
 
 import { CorruptError } from "./errors.js";
@@ -56,16 +56,40 @@ const DISTANCE_EXTRA_BITS = [
 ];
 const CODE_LENGTH_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
 
-/** A decoding table: `table[bits & mask]` is `symbol << 4 | length`, or 0 for an invalid code. */
+const LITERAL_ROOT = 10;
+const DISTANCE_ROOT = 8;
+const CODE_LENGTH_ROOT = 7;
+
+/**
+ * A decoding table in two levels. `entries[bits & mask]` (the "root", the low `rootBits` bits of
+ * the stream) is `symbol << 4 | length` for every code of at most `rootBits` bits, and 0 for a
+ * prefix of a longer code or an unassigned slot. Longer codes are resolved by canonical-code
+ * bookkeeping (puff.c): `count[len]` codes per length and `symbols` sorted by length, then value.
+ * Building costs O(symbols + 2^rootBits), whatever the longest code.
+ */
 interface Table {
   readonly entries: Uint16Array;
+  readonly root: number;
   mask: number;
+  rootBits: number;
   /** The length of the longest code; an unassigned slot is invalid only once that many bits are real. */
   bits: number;
+  readonly count: Uint16Array;
+  readonly offset: Uint16Array;
+  readonly symbols: Uint16Array;
 }
 
-function newTable(bits: number): Table {
-  return { entries: new Uint16Array(1 << bits), mask: 0, bits: 0 };
+function newTable(root: number): Table {
+  return {
+    entries: new Uint16Array(1 << root),
+    root,
+    mask: 0,
+    rootBits: 0,
+    bits: 0,
+    count: new Uint16Array(MAX_BITS + 1),
+    offset: new Uint16Array(MAX_BITS + 2),
+    symbols: new Uint16Array(320),
+  };
 }
 
 /**
@@ -80,50 +104,83 @@ function buildTable(
   table: Table,
   allowIncomplete: boolean,
 ): boolean {
-  const perLength = new Uint16Array(MAX_BITS + 1);
+  const perLength = table.count;
+  perLength.fill(0);
   let maxLength = 0;
   for (let i = 0; i < count; i++) {
     const length = lengths[start + i] as number;
     perLength[length] = (perLength[length] as number) + 1;
     if (length > maxLength) maxLength = length;
   }
-  table.mask = (1 << maxLength) - 1;
+  const rootBits = maxLength < table.root ? maxLength : table.root;
   table.bits = maxLength;
-  table.entries.fill(0, 0, 1 << maxLength);
+  table.rootBits = rootBits;
+  table.mask = (1 << rootBits) - 1;
+  table.entries.fill(0, 0, 1 << rootBits);
   if (maxLength === 0) return true; // no codes: any code decoded later is invalid
 
+  perLength[0] = 0;
   let left = 1;
-  const nextCode = new Uint16Array(MAX_BITS + 2);
   for (let length = 1; length <= MAX_BITS; length++) {
     left = (left << 1) - (perLength[length] as number);
     if (left < 0) return false; // over-subscribed
-    nextCode[length + 1] = (nextCode[length] as number) + (perLength[length] as number);
   }
   if (left > 0 && !(allowIncomplete && maxLength === 1)) return false; // incomplete
 
-  // first code of each length, then assign
-  const firstCode = new Uint16Array(MAX_BITS + 2);
-  let code = 0;
+  // symbols sorted by length, then by value
+  const offset = table.offset;
+  offset[1] = 0;
   for (let length = 1; length <= MAX_BITS; length++) {
-    code = (code + (perLength[length - 1] as number)) << 1;
-    firstCode[length] = code;
+    offset[length + 1] = (offset[length] as number) + (perLength[length] as number);
   }
-  firstCode[0] = 0;
-  const assigned = new Uint16Array(MAX_BITS + 2);
   for (let symbol = 0; symbol < count; symbol++) {
     const length = lengths[start + symbol] as number;
-    if (length === 0) continue;
-    const value = (firstCode[length] as number) + (assigned[length] as number);
-    assigned[length] = (assigned[length] as number) + 1;
-    // deflate packs Huffman codes most significant bit first into a least-significant-first stream
-    let reversed = 0;
-    for (let bit = 0; bit < length; bit++) reversed |= ((value >> bit) & 1) << (length - 1 - bit);
-    const entry = (symbol << 4) | length;
-    for (let index = reversed; index < 1 << maxLength; index += 1 << length) {
-      table.entries[index] = entry;
+    if (length !== 0) {
+      table.symbols[offset[length] as number] = symbol;
+      offset[length] = (offset[length] as number) + 1;
     }
   }
+
+  // the root: every code of at most rootBits bits, replicated over the unused high bits
+  let code = 0;
+  let index = 0;
+  const size = 1 << rootBits;
+  for (let length = 1; length <= rootBits; length++) {
+    const n = perLength[length] as number;
+    for (let k = 0; k < n; k++) {
+      // deflate packs Huffman codes most significant bit first into a least-significant-first stream
+      let reversed = 0;
+      for (let bit = 0; bit < length; bit++) reversed |= ((code >> bit) & 1) << (length - 1 - bit);
+      const entry = ((table.symbols[index++] as number) << 4) | length;
+      for (let slot = reversed; slot < size; slot += 1 << length) table.entries[slot] = entry;
+      code++;
+    }
+    code <<= 1;
+  }
   return true;
+}
+
+/**
+ * Decode a code longer than the root bit by bit (puff.c) from the bits in `buf`, of which `have`
+ * are real. Returns `symbol << 4 | length`, or 0 if the real bits end before the code does.
+ */
+function decodeSlow(table: Table, buf: number, have: number): number {
+  let code = 0;
+  let first = 0;
+  let index = 0;
+  const max = table.bits < have ? table.bits : have;
+  for (let length = 1; length <= max; length++) {
+    code |= buf & 1;
+    buf >>>= 1;
+    const n = table.count[length] as number;
+    if (code - n < first) {
+      return ((table.symbols[index + (code - first)] as number) << 4) | length;
+    }
+    index += n;
+    first = (first + n) << 1;
+    code <<= 1;
+  }
+  return 0;
 }
 
 // Fixed Huffman tables (RFC 1951 section 3.2.6), built once.
@@ -137,8 +194,8 @@ function fixedTables(): [Table, Table] {
     lengths.fill(7, 256, 280);
     lengths.fill(8, 280, 288);
     lengths.fill(5, 288, 320); // 32 distance codes; symbols 30 and 31 are invalid when decoded
-    fixedLiteral = newTable(MAX_BITS);
-    fixedDistance = newTable(MAX_BITS);
+    fixedLiteral = newTable(LITERAL_ROOT);
+    fixedDistance = newTable(DISTANCE_ROOT);
     buildTable(lengths, 0, 288, fixedLiteral, false);
     buildTable(lengths, 288, 32, fixedDistance, false);
   }
@@ -171,9 +228,14 @@ export class Inflater {
   private repeatSymbol = 0;
   private previousLength = 0;
 
-  private readonly codeLengthTable = newTable(7);
-  private readonly dynamicLiteral = newTable(MAX_BITS);
-  private readonly dynamicDistance = newTable(MAX_BITS);
+  private readonly codeLengthTable = newTable(CODE_LENGTH_ROOT);
+  private readonly dynamicLiteral = newTable(LITERAL_ROOT);
+  private readonly dynamicDistance = newTable(DISTANCE_ROOT);
+  // The code lengths the dynamic tables were built from, to skip an identical rebuild.
+  private readonly builtLengths = new Uint8Array(286 + 30);
+  private builtTotal = 0;
+  private builtLiteralCount = 0;
+  private tablesValid = false;
   private literalTable: Table = this.dynamicLiteral;
   private distanceTable: Table = this.dynamicDistance;
 
@@ -430,12 +492,17 @@ export class Inflater {
           // The literal/length symbol is peeked: a literal that cannot be written yet is not consumed.
           this.ensure(MAX_BITS);
           const table = this.literalTable;
-          const entry = table.entries[this.bitBuf & table.mask] as number;
-          const length = entry & 15;
-          if (length === 0) {
-            if (this.bitCount >= table.bits) this.corrupt("invalid literal/length code");
-            return this.need(outPos);
+          let entry = table.entries[this.bitBuf & table.mask] as number;
+          if (entry === 0) {
+            if (table.bits > table.rootBits) {
+              entry = decodeSlow(table, this.bitBuf, this.bitCount);
+              if (entry === 0) return this.need(outPos);
+            } else {
+              if (this.bitCount >= table.bits) this.corrupt("invalid literal/length code");
+              return this.need(outPos);
+            }
           }
+          const length = entry & 15;
           if (length > this.bitCount) return this.need(outPos);
           const symbol = entry >> 4;
           if (symbol < 256) {
@@ -464,12 +531,17 @@ export class Inflater {
         case DISTANCE_SYMBOL: {
           this.ensure(MAX_BITS);
           const table = this.distanceTable;
-          const entry = table.entries[this.bitBuf & table.mask] as number;
-          const length = entry & 15;
-          if (length === 0) {
-            if (this.bitCount >= table.bits) this.corrupt("invalid distance code");
-            return this.need(outPos);
+          let entry = table.entries[this.bitBuf & table.mask] as number;
+          if (entry === 0) {
+            if (table.bits > table.rootBits) {
+              entry = decodeSlow(table, this.bitBuf, this.bitCount);
+              if (entry === 0) return this.need(outPos);
+            } else {
+              if (this.bitCount >= table.bits) this.corrupt("invalid distance code");
+              return this.need(outPos);
+            }
           }
+          const length = entry & 15;
           if (length > this.bitCount) return this.need(outPos);
           const symbol = entry >> 4;
           if (symbol > 29) this.corrupt("invalid distance symbol");
@@ -520,11 +592,21 @@ export class Inflater {
 
   private finishDynamicTables(): void {
     if ((this.lengths[256] as number) === 0) this.corrupt("missing end-of-block code");
-    if (!buildTable(this.lengths, 0, this.literalCount, this.dynamicLiteral, true)) {
-      this.corrupt("invalid literal/length code lengths");
-    }
-    if (!buildTable(this.lengths, this.literalCount, this.distanceCount, this.dynamicDistance, true)) {
-      this.corrupt("invalid distance code lengths");
+    const total = this.literalCount + this.distanceCount;
+    let same = this.tablesValid && this.builtTotal === total && this.builtLiteralCount === this.literalCount;
+    for (let i = 0; same && i < total; i++) same = this.lengths[i] === this.builtLengths[i];
+    if (!same) {
+      this.tablesValid = false;
+      if (!buildTable(this.lengths, 0, this.literalCount, this.dynamicLiteral, true)) {
+        this.corrupt("invalid literal/length code lengths");
+      }
+      if (!buildTable(this.lengths, this.literalCount, this.distanceCount, this.dynamicDistance, true)) {
+        this.corrupt("invalid distance code lengths");
+      }
+      this.builtLengths.set(this.lengths.subarray(0, total));
+      this.builtTotal = total;
+      this.builtLiteralCount = this.literalCount;
+      this.tablesValid = true;
     }
     this.literalTable = this.dynamicLiteral;
     this.distanceTable = this.dynamicDistance;
