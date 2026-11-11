@@ -9,7 +9,6 @@
 
 import { createHash } from "node:crypto";
 import zlib from "node:zlib";
-import { adler32 } from "../src/checksum.js";
 
 const MASK64 = (1n << 64n) - 1n;
 const MAX_MATCH = 258;
@@ -29,7 +28,7 @@ export function data(seed: number | bigint, size: number): Uint8Array {
 }
 
 /** Writes DEFLATE fields: least significant bit first; Huffman codes most significant bit first. */
-class BitWriter {
+export class BitWriter {
   private chunks: Uint8Array[] = [];
   private current: number[] = [];
   private acc = 0;
@@ -66,6 +65,21 @@ class BitWriter {
       this.chunks.push(Uint8Array.from(this.current));
       this.current = [];
     }
+  }
+
+  /** Pad with zero bits to the next byte boundary. */
+  align(): void {
+    if (this.count > 0) {
+      this.current.push(this.acc & 0xff);
+      this.acc = 0;
+      this.count = 0;
+    }
+  }
+
+  /** Append whole bytes; only valid on a byte boundary. */
+  raw(bytes: Uint8Array): void {
+    this.flush();
+    this.chunks.push(bytes);
   }
 
   finish(): Uint8Array {
@@ -175,8 +189,120 @@ export function gzipStored(payload: Uint8Array): Uint8Array {
   return gzipMember(storedDeflate(payload), zlib.crc32(payload) >>> 0, payload.length);
 }
 
+/** Adler-32 (RFC 1950), standalone so this package depends on nothing. */
+export function adler32(data: Uint8Array): number {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < data.length; ) {
+    const end = Math.min(i + 5552, data.length);
+    for (; i < end; i++) {
+      a += data[i] as number;
+      b += a;
+    }
+    a %= 65521;
+    b %= 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
 export function zlibStored(payload: Uint8Array): Uint8Array {
   return zlibWrap(storedDeflate(payload), adler32(payload));
+}
+
+// -- brotli (RFC 7932), spec/generators.md ---------------------------------------------------
+
+export const BROTLI_METABLOCK_MAX = 1 << 24;
+const BROTLI_MIN_COMMAND_BYTES = 4 + 2118;
+
+function brotliWindowBits(w: BitWriter, wbits: number): void {
+  if (wbits === 16) {
+    w.bits(0, 1);
+  } else if (wbits === 17) {
+    w.bits(1, 1);
+    w.bits(0, 3);
+    w.bits(0, 3);
+  } else if (wbits >= 18 && wbits <= 24) {
+    w.bits(1, 1);
+    w.bits(wbits - 17, 3);
+  } else if (wbits >= 10 && wbits <= 15) {
+    w.bits(1, 1);
+    w.bits(0, 3);
+    w.bits(wbits - 8, 3);
+  } else {
+    throw new RangeError("brotli window bits must be in 10..24");
+  }
+}
+
+function brotliMlen(w: BitWriter, mlen: number): void {
+  const value = mlen - 1;
+  w.bits(0, 1); // ISLAST
+  if (value < 1 << 16) {
+    w.bits(0, 2);
+    w.bits(value, 16);
+  } else if (value < 1 << 20) {
+    w.bits(1, 2);
+    w.bits(value, 20);
+  } else {
+    w.bits(2, 2);
+    w.bits(value, 24);
+  }
+}
+
+function brotliEnd(w: BitWriter): void {
+  w.bits(1, 1); // ISLAST
+  w.bits(1, 1); // ISLASTEMPTY
+}
+
+function brotliZerosMetablock(w: BitWriter, mlen: number): void {
+  brotliMlen(w, mlen);
+  w.bits(0, 1); // ISUNCOMPRESSED
+  w.bits(0, 3); // NBLTYPESL, NBLTYPESI, NBLTYPESD = 1
+  w.bits(0, 2); // NPOSTFIX
+  w.bits(0, 4); // NDIRECT
+  w.bits(0, 2); // context mode of the one literal block type
+  w.bits(0, 2); // NTREESL = 1, NTREESD = 1
+  for (const [symbol, symbolBits] of [[0, 8], [423, 10], [0, 6]] as const) {
+    w.bits(1, 2); // HSKIP = 1: simple prefix code
+    w.bits(0, 2); // NSYM - 1
+    w.bits(symbol, symbolBits);
+  }
+  w.bits(mlen - 4 - 2118, 24); // extra bits of copy length code 23
+}
+
+/** BrotliZeros: `size` zero bytes in a few bytes per 16 MiB meta-block. */
+export function brotliZeros(size: number, wbits: number): Uint8Array {
+  const w = new BitWriter();
+  brotliWindowBits(w, wbits);
+  while (size > 0) {
+    let chunk = Math.min(size, BROTLI_METABLOCK_MAX);
+    const remainder = size - chunk;
+    if (remainder > 0 && remainder < BROTLI_MIN_COMMAND_BYTES) chunk -= BROTLI_MIN_COMMAND_BYTES;
+    brotliZerosMetablock(w, chunk);
+    size -= chunk;
+  }
+  brotliEnd(w);
+  return w.finish();
+}
+
+/** BrotliStored: uncompressed meta-blocks around `payload`. */
+export function brotliStored(payload: Uint8Array, wbits: number): Uint8Array {
+  const w = new BitWriter();
+  brotliWindowBits(w, wbits);
+  for (let pos = 0; pos < payload.length; ) {
+    const chunk = payload.subarray(pos, pos + BROTLI_METABLOCK_MAX);
+    brotliMlen(w, chunk.length);
+    w.bits(1, 1); // ISUNCOMPRESSED
+    w.align();
+    w.raw(chunk);
+    pos += chunk.length;
+  }
+  brotliEnd(w);
+  return w.finish();
+}
+
+/** The reserved WBITS pattern 1000001 that announces a large-window stream. */
+export function brotliLargeWindowPrefix(): Uint8Array {
+  return Uint8Array.of(0x11, 0x00, 0x00, 0x00);
 }
 
 function zerosStream(codec: string, matches: number): Uint8Array {
@@ -188,7 +314,8 @@ function zerosStream(codec: string, matches: number): Uint8Array {
   throw new NotImplemented(`zeros generator for codec ${codec}`);
 }
 
-function wrapOnce(codec: string, payload: Uint8Array): Uint8Array {
+function wrapOnce(codec: string, payload: Uint8Array, window = 0): Uint8Array {
+  if (codec === "br") return brotliStored(payload, window);
   if (codec === "gzip") return gzipStored(payload);
   if (codec === "zlib") return zlibStored(payload);
   if (codec === "raw") return storedDeflate(payload);
@@ -206,13 +333,17 @@ export interface GeneratorSpec {
 /** Build the compressed stream a generator spec describes. */
 export function generate(spec: GeneratorSpec): Uint8Array {
   const { kind, params } = spec;
-  if (kind === "zeros") return zerosStream(params["codec"] as string, (params["matches"] as number | undefined) ?? 0);
+  const window = (params["window"] as number | undefined) ?? 0;
+  if (kind === "zeros") {
+    if (params["codec"] === "br") return brotliZeros(params["size"] as number, window);
+    return zerosStream(params["codec"] as string, (params["matches"] as number | undefined) ?? 0);
+  }
   if (kind === "data") {
-    return wrapOnce(params["codec"] as string, data(params["seed"] as number, params["size"] as number));
+    return wrapOnce(params["codec"] as string, data(params["seed"] as number, params["size"] as number), window);
   }
   if (kind === "wrap") {
     let stream = generate(params["inner"] as GeneratorSpec);
-    for (let i = 0; i < (params["times"] as number); i++) stream = wrapOnce(params["codec"] as string, stream);
+    for (let i = 0; i < (params["times"] as number); i++) stream = wrapOnce(params["codec"] as string, stream, window);
     return stream;
   }
   throw new Error(`unknown generator kind ${kind}`);

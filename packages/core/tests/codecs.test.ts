@@ -5,7 +5,7 @@ import zlib from "node:zlib";
 import { test } from "node:test";
 import { isZlibHeader } from "../src/deflate.js";
 import { crc32 } from "../src/checksum.js";
-import { storedDeflate, zlibStored } from "./corpus.js";
+import { storedDeflate, zlibStored } from "spillgate-test-support";
 import { LOOSE, Trickle, concat, gz, outcome, raw, zl } from "./helpers.js";
 
 const DATA = Buffer.from(Array.from({ length: 5120 }, (_, i) => i & 255));

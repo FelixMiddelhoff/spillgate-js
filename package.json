@@ -11,8 +11,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "test": "npm run build && npm test --workspaces --if-present",
+    "build": "npm run build -w spillgate-test-support && npm run build -w spillgate && npm run build -w spillgate-br && npm run build -w spillgate-zstd --if-present && npm run build -w spillgate-integration",
+    "test": "npm run build && npm test -w spillgate && npm test -w spillgate-br && npm test -w spillgate-zstd --if-present && npm test -w spillgate-integration",
     "spectrace": "npm run spectrace -w spillgate"
   },
   "devDependencies": {

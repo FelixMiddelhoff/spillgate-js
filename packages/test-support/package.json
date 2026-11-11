@@ -1,0 +1,18 @@
+{
+  "name": "spillgate-test-support",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Test inputs built without a compressor (spec/generators.md), shared by the test suites.",
+  "type": "module",
+  "main": "./dist/src/corpus.js",
+  "types": "./dist/src/corpus.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/corpus.d.ts",
+      "default": "./dist/src/corpus.js"
+    }
+  },
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json"
+  }
+}

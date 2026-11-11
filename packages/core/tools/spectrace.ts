@@ -8,7 +8,7 @@
  * Usage: node dist/tools/spectrace.js [--allow-uncovered]
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,9 +24,14 @@ const manifest = JSON.parse(readFileSync(join(root, "conformance", "manifest.jso
 };
 const covered = new Set<string>(manifest.vectors.flatMap((v) => v.rules));
 
-const testDir = join(root, "packages", "core", "tests");
-for (const file of readdirSync(testDir).filter((f) => f.endsWith(".test.ts"))) {
-  const text = readFileSync(join(testDir, file), "utf8");
+const testFiles = readdirSync(join(root, "packages"), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .flatMap((entry) => {
+    const dir = join(root, "packages", entry.name, "tests");
+    return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".test.ts")).map((f) => join(dir, f)) : [];
+  });
+for (const file of testFiles) {
+  const text = readFileSync(file, "utf8");
   for (const title of text.matchAll(/test\(\s*[`"']Covers:([^`"'\n]*)/g)) {
     for (const id of (title[1] as string).matchAll(RULE)) covered.add(id[0]);
   }

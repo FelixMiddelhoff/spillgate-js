@@ -41,5 +41,8 @@
   "dependencies": {},
   "peerDependencies": {
     "spillgate": "0.1.0-dev.0"
+  },
+  "devDependencies": {
+    "spillgate-test-support": "0.0.0"
   }
 }

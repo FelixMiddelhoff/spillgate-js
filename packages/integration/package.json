@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "test": "npm run build && node --test \"dist/tests/**/*.test.js\""
+    "test": "npm run build && node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "spillgate": "0.1.0-dev.0",
