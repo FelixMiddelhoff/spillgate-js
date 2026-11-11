@@ -25,6 +25,9 @@ The latest release only.
 
 ## Scope
 
-The limits, header parsing, the DEFLATE decoder, gzip and deflate framing and the reader contract
-are in scope. Bugs in the JavaScript engine or in other packages are reported upstream; tell us
+The limits, header parsing, the DEFLATE decoder, gzip and deflate framing, the reader contract,
+the own zstd decoder (`spillgate-zstd`) and the window and input handling around brotli
+(`spillgate-br`) are in scope. `spillgate-br` runs brotli-dec-wasm, pinned to an exact version:
+flaws inside that decoder go upstream, but report them to us too if the limiter should have
+contained them. Bugs in the JavaScript engine or in other packages are reported upstream; tell us
 as well if the limiter should have contained them.
