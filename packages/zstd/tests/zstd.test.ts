@@ -338,3 +338,10 @@ test("Covers: SG-R-CDC-05 - a compressed block without sequences must end after 
   assert.equal((await run(build([0, 0, 0])))[0], "corrupt");
   assert.equal(oracle(build([0x01])), undefined);
 });
+
+test("Covers: SG-R-CDC-05 - a Huffman tree without two weight-one symbols is corrupt", async () => {
+  // Found by the review of the Rust port: weights [2,2,3]; libzstd refuses the frame.
+  const frame = Buffer.from("28b52ffd00003d000042c00081226300", "hex");
+  assert.equal(oracle(frame), undefined);
+  assert.equal((await run(frame))[0], "corrupt");
+});

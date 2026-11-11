@@ -9,8 +9,8 @@
     "test": "npm run build && node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
-    "spillgate": "0.1.1",
-    "spillgate-br": "0.1.1",
-    "spillgate-zstd": "0.1.1"
+    "spillgate": "0.1.2",
+    "spillgate-br": "0.1.2",
+    "spillgate-zstd": "0.1.2"
   }
 }

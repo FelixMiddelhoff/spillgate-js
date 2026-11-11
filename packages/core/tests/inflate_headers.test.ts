@@ -226,3 +226,30 @@ test("Covers: SG-R-CDC-08 SG-I-05 - an over-subscribed literal/length code is co
   assert.equal(oracle(data), undefined, "the oracle refuses an over-subscribed code");
   assert.equal((await ours(data))[0], "corrupt");
 });
+
+test("Covers: SG-R-CDC-03 - repeat-previous (16) after a run of zeros repeats the zero", async () => {
+  // Found by the review of the Rust port: the previous length was not updated by codes 17 and 18.
+  // Raw deflate, 15 bytes; zlib decodes it to "a".
+  const stream = Buffer.from("05c0250100000000a0ad04f9ff0004", "hex");
+  assert.deepEqual(zlib.inflateRawSync(stream), Buffer.from("a"));
+  const out = await new Decoder({ maxOutput: 100 }).readAll(stream, "deflate");
+  assert.deepEqual(Buffer.from(out), Buffer.from("a"));
+});
+
+test("Covers: SG-R-RDR-01 SG-I-09 - bytes delivered before a deflate error do not depend on the read size", async () => {
+  // Found by the review of the Rust port: the bytes of the failing step used to be dropped.
+  const stream = Buffer.from("4b4c4c043e00", "hex");
+  const results: string[] = [];
+  for (const size of [1, 2, 3, 4096]) {
+    const reader = new Decoder({ maxOutput: 100, disableRatioLimit: true }).reader(stream, "deflate");
+    const parts: Buffer[] = [];
+    let kind = "ok";
+    try {
+      for (let c = await reader.read(size); c !== null; c = await reader.read(size)) parts.push(Buffer.from(c));
+    } catch (error) {
+      kind = error instanceof SpillgateError ? error.kind : "foreign";
+    }
+    results.push(`${Buffer.concat(parts).toString()}:${kind}`);
+  }
+  assert.deepEqual(results, ["aaa:corrupt", "aaa:corrupt", "aaa:corrupt", "aaa:corrupt"]);
+});

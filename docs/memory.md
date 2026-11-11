@@ -25,7 +25,7 @@ The optional codecs add their decoder window, bounded by the window cap of the c
 
 | Codec | Default cap | Per stream |
 | --- | --- | --- |
-| `spillgate-br` | 24 window bits (16 MiB) | window plus the WASM instance, freed when the reader closes |
+| `spillgate-br` | 24 window bits (16 MiB) | window plus up to 3.3 MiB of decoder tables that a hostile header can force (measured in the Rust port with the same decoder logic), freed when the reader closes |
 | `spillgate-zstd` | 8 MiB (`maxWindowBytes`, 1 KiB to 1 GiB) | window ring plus a few buffers of at most 128 KiB |
 
 The cap is checked from the header before anything is allocated; the tests measure that a hostile

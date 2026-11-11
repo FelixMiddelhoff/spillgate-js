@@ -2,7 +2,15 @@
 
 Versions below 1.0 may still change the API.
 
-## 0.1.1 - 2026-11-11
+## 0.1.2 - 2026-11-11
+
+Fixes found by the independent review of the Rust port, which differential-fuzzed the same algorithms.
+
+- `spillgate` (gzip, deflate): a dynamic block whose code lengths use "repeat previous length" (16) right after a run of zeros (17, 18) repeated the length from before the run instead of 0. Valid streams were refused as `corrupt`, and a crafted stream could build different tables than zlib. Fixed.
+- `spillgate` (deflate, gzip): the bytes a failing step had already produced were dropped, so the data delivered before a `corrupt` error depended on the read size (SG-R-RDR-01). They are delivered now and the error follows on the next read.
+- `spillgate-zstd`: a Huffman tree must have an even number, at least two, of weight-1 symbols (as libzstd requires); other trees were accepted before.
+
+## 0.1.1 - 2026-11-11 (core only on npm; superseded by 0.1.2)
 
 - `spillgate-zstd`: a compressed block without sequences must end right after the sequence count byte; bytes after it are now `corrupt` (they were skipped before; libzstd refuses them). Found by differential testing for the Rust port.
 

@@ -193,11 +193,30 @@ export class Inflater {
    * @throws CorruptError invalid DEFLATE data
    */
   step(input: Uint8Array, out: Uint8Array): Status {
+    if (this.pending !== undefined) {
+      // An error found after bytes were already written: those were delivered, now it follows.
+      const error = this.pending;
+      this.pending = undefined;
+      this.used = 0;
+      this.produced = 0;
+      throw error;
+    }
     this.input = input;
     this.inPos = 0;
+    this.partial = 0;
     let outPos = 0;
     try {
       outPos = this.run(out);
+    } catch (error) {
+      // What is delivered before an error must not depend on the size of the caller's buffer
+      // (SG-R-RDR-01): keep the error for the next step and hand out the bytes now.
+      if (error instanceof CorruptError && this.partial > 0) {
+        this.pending = error;
+        this.status = OUTPUT_FULL;
+        outPos = this.partial;
+      } else {
+        throw error;
+      }
     } finally {
       this.used = this.inPos;
       this.input = EMPTY;
@@ -205,6 +224,10 @@ export class Inflater {
     this.produced = outPos;
     return this.status;
   }
+
+  /** Bytes written by a `run` that ended with an error, and the error held back until the next step. */
+  private partial = 0;
+  private pending: CorruptError | undefined;
 
   private status: Status = NEED_INPUT;
 
@@ -217,6 +240,7 @@ export class Inflater {
     this.windowPos = 0;
     this.windowFilled = 0;
     this.status = NEED_INPUT;
+    this.pending = undefined;
   }
 
   /** Whole input bytes that were read into the bit buffer but are not part of the stream. */
@@ -263,6 +287,7 @@ export class Inflater {
   private run(out: Uint8Array): number {
     let outPos = 0;
     const win = this.window;
+    try {
     for (;;) {
       switch (this.state) {
         case BLOCK_HEADER: {
@@ -396,6 +421,8 @@ export class Inflater {
           }
           this.lengths.fill(value, this.lengthIndex, this.lengthIndex + repeat);
           this.lengthIndex += repeat;
+          // A later "repeat previous" (16) repeats the last length written, which after 17 or 18 is 0.
+          this.previousLength = value;
           this.state = DYN_SYMBOLS;
           break;
         }
@@ -483,6 +510,11 @@ export class Inflater {
           this.status = DONE;
           return outPos;
       }
+    }
+    } catch (error) {
+      // The bytes written before the error are still delivered (see step()).
+      this.partial = outPos;
+      throw error;
     }
   }
 

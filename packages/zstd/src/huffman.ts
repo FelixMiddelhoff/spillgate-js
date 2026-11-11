@@ -48,6 +48,11 @@ export function readHuffmanTable(bytes: Uint8Array): { table: HuffmanTable; used
   const rest = power - total;
   if (rest === 0 || (rest & (rest - 1)) !== 0) throw new CorruptError("zstd: Huffman weights do not complete a tree");
   weights.push(32 - Math.clz32(rest)); // log2(rest) + 1
+  // libzstd refuses a tree with fewer than two weight-1 symbols (the implied one included) or an odd
+  // number of them; accepting it would be a parser differential (found by the Rust port's review).
+  let ones = 0;
+  for (const w of weights) if (w === 1) ones++;
+  if (ones < 2 || ones % 2 === 1) throw new CorruptError("zstd: Huffman weights do not form a valid tree");
   if (maxBits > MAX_HUFFMAN_BITS) throw new CorruptError("zstd: a Huffman code is too long");
   if (weights.length > 256) throw new CorruptError("zstd: too many Huffman symbols");
   return { table: buildHuffman(weights, maxBits), used };
