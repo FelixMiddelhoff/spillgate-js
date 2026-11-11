@@ -224,6 +224,30 @@ A single `read(n)` returns at most 64 KiB whatever `n` is. Loop until it resolve
 `CanceledError`, sticky. It cannot interrupt one step inside the decoder (the limits bound that), and
 it does not interrupt a `read` of your source that is already waiting; use socket timeouts for that.
 
+### 3.7a Brotli and zstd
+
+The core handles gzip and deflate. Add the optional packages for `br` and `zstd`:
+
+```ts
+import { Decoder } from "spillgate";
+import { initBrotli, codec as br } from "spillgate-br";
+import { codec as zstd } from "spillgate-zstd";
+
+await initBrotli(); // once at startup; loads the WASM module
+const decoder = new Decoder(
+  { maxOutput: 8 * 1024 * 1024 },
+  { codecs: { br: br({ maxWindowBits: 22 }), zstd: zstd({ maxWindowBytes: 8 * 1024 * 1024 }) } },
+);
+```
+
+- Only register what you accept. A coding without a codec is refused as `unsupported_encoding` (415).
+- The window cap is checked from the stream header before any memory is allocated. A stream that asks
+  for more is refused as `memory_limit`. Defaults: brotli 16 MiB (24 bits), zstd 8 MiB. Memory per
+  stream is about the window plus 128 KiB; budget it as `concurrent requests x (window + maxOutput)`.
+- Brotli large-window streams and zstd dictionaries are refused (`memory_limit` and `corrupt`).
+- Truncated brotli or zstd data is `corrupt`; a damaged zstd checksum is `corrupt` after the output
+  already delivered, so treat the whole body as failed.
+
 ### 3.8 Your own codec
 
 Register it on the decoder: `new Decoder(limits, { codecs: { snappy } })`. It runs behind the same

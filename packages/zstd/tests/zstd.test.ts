@@ -1,12 +1,15 @@
 /** The zstd decoder (SG-R-CDC-05), checked against node:zlib's zstd encoder and decoder. */
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import zlib from "node:zlib";
 import { Decoder, InvalidOptionError, SpillgateError, type Limits } from "spillgate";
 import { data, zstdHeader, zstdRawBlocks, zstdRleBlocks, zstdSkippable, zstdStored, zstdZeros } from "spillgate-test-support";
 import { codec, DEFAULT_MAX_WINDOW } from "../src/index.js";
 import { XXH64 } from "../src/xxhash64.js";
+
+// The reference encoder (zlib.zstd*) exists from Node 22.15; older Node runs only the package tests elsewhere.
+const test = typeof (zlib as { zstdCompressSync?: unknown }).zstdCompressSync === "function" ? nodeTest : nodeTest.skip;
 
 const LOOSE: Limits = { maxOutput: 2 ** 30, disableRatioLimit: true };
 const MIB = 2 ** 20;

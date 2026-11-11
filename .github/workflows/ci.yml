@@ -45,8 +45,7 @@ jobs:
         run: npm audit --audit-level=low
       - name: the package contents and a clean install
         run: |
-          npm pack --dry-run
-          npm pack
+          for pkg in core br zstd; do npm pack --dry-run -w packages/$pkg; npm pack -w packages/$pkg; done
           mkdir /tmp/consumer && cd /tmp/consumer && npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE"/spillgate-*.tgz
-          node --input-type=module -e "import { decodeAll } from 'spillgate'; import { gzipSync } from 'node:zlib'; const out = await decodeAll(gzipSync('wheel ok'), 'gzip', { maxOutput: 100 }); console.log(Buffer.from(out).toString());"
+          node --input-type=module -e "import { decodeAll } from 'spillgate'; import { initBrotli } from 'spillgate-br'; import { codec } from 'spillgate-zstd'; import { gzipSync } from 'node:zlib'; await initBrotli(); codec(); const out = await decodeAll(gzipSync('pack ok'), 'gzip', { maxOutput: 100 }); console.log(Buffer.from(out).toString());"

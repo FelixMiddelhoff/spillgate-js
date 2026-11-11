@@ -20,5 +20,13 @@ memory by less than 16 MiB, and reading one byte at a time costs constant memory
 JavaScript numbers count bytes exactly up to 2\*\*53-1 (about 9 PB); a limit above that behaves like
 2\*\*53-1.
 
-The optional brotli and zstd codecs add their decoder window, which is bounded by the window cap of
-the codec, not by `maxOutput`.
+The optional codecs add their decoder window, bounded by the window cap of the codec, not by
+`maxOutput`:
+
+| Codec | Default cap | Per stream |
+| --- | --- | --- |
+| `spillgate-br` | 24 window bits (16 MiB) | window plus the WASM instance, freed when the reader closes |
+| `spillgate-zstd` | 8 MiB (`maxWindowBytes`, 1 KiB to 1 GiB) | window ring plus a few buffers of at most 128 KiB |
+
+The cap is checked from the header before anything is allocated; the tests measure that a hostile
+header allocates nothing and that a 1 GiB bomb decodes with constant memory.

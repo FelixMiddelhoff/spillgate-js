@@ -44,3 +44,10 @@ The package name is reserved only by the first publish, so do the first release 
 Never delete or re-publish a version (npm refuses it; unpublishing breaks users). A wrong release is
 deprecated (`npm deprecate`) and fixed with the next patch version. Versions at or above 1.0 need
 separate, explicit consent.
+
+## Three packages
+
+A tag publishes `spillgate`, `spillgate-br` and `spillgate-zstd` together; the workflow refuses a tag
+that differs from any of the three versions. Trusted publishing must be configured on npmjs.com for
+each package after its first release, with the same workflow file and environment. The first release of
+each package needs the short-lived token described above.

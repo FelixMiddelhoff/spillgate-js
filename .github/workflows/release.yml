@@ -22,16 +22,18 @@ jobs:
       - run: npm ci
       - name: the tag must equal the package version
         run: |
-          version=$(node -p "require('./package.json').version")
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != version $version"; exit 1; }
+          for pkg in core br zstd; do
+            version=$(node -p "require('./packages/$pkg/package.json').version")
+            test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != version $version in $pkg"; exit 1; }
+          done
       - run: npm test
       - run: npm run spectrace
-      - run: npm pack
+      - run: for pkg in core br zstd; do npm pack -w packages/$pkg; done
       - name: the tarball works in a clean project
         run: |
           mkdir /tmp/consumer && cd /tmp/consumer && npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE"/spillgate-*.tgz
-          node --input-type=module -e "import { decodeAll } from 'spillgate'; import { gzipSync } from 'node:zlib'; console.log(Buffer.from(await decodeAll(gzipSync('ok'), 'gzip', { maxOutput: 100 })).toString());"
+          node --input-type=module -e "import { decodeAll } from 'spillgate'; import { initBrotli } from 'spillgate-br'; import { codec } from 'spillgate-zstd'; import { gzipSync } from 'node:zlib'; await initBrotli(); codec(); console.log(Buffer.from(await decodeAll(gzipSync('ok'), 'gzip', { maxOutput: 100 })).toString());"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package
@@ -59,7 +61,11 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
       - name: publish the tarball that was tested
-        run: npm publish package/spillgate-*.tgz --provenance --access public
+        run: |
+          # core first: br and zstd depend on it
+          for t in package/spillgate-[0-9]*.tgz package/spillgate-br-*.tgz package/spillgate-zstd-*.tgz; do
+            npm publish "$t" --provenance --access public
+          done
         env:
           # Empty once trusted publishing is configured; only the first release may need a token.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
