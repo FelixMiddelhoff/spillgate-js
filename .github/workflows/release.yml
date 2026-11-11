@@ -63,7 +63,7 @@ jobs:
       - name: publish the tarball that was tested
         run: |
           # core first: br and zstd depend on it
-          for t in package/spillgate-[0-9]*.tgz package/spillgate-br-*.tgz package/spillgate-zstd-*.tgz; do
+          for t in ./package/spillgate-[0-9]*.tgz ./package/spillgate-br-*.tgz ./package/spillgate-zstd-*.tgz; do
             npm publish "$t" --provenance --access public
           done
         env:
