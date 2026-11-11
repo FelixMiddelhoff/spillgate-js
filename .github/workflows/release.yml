@@ -64,7 +64,23 @@ jobs:
         run: |
           # core first: br and zstd depend on it
           for t in ./package/spillgate-[0-9]*.tgz ./package/spillgate-br-*.tgz ./package/spillgate-zstd-*.tgz; do
-            npm publish "$t" --provenance --access public
+            name=$(tar -xzOf "$t" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).name")
+            version=$(tar -xzOf "$t" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+            # A re-run after a partial failure must not stop at what is already published.
+            if npm view "$name@$version" version --prefer-online >/dev/null 2>&1; then
+              echo "$name@$version is already published, skipping"
+              continue
+            fi
+            if ! out=$(npm publish "$t" --provenance --access public 2>&1); then
+              echo "$out"
+              # The registry can lag behind a publish of a minute ago: the same version is not an error.
+              if echo "$out" | grep -q "previously published versions"; then
+                echo "$name@$version was published before, skipping"
+                continue
+              fi
+              exit 1
+            fi
+            echo "$out"
           done
         env:
           # Empty once trusted publishing is configured; only the first release may need a token.
