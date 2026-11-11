@@ -305,6 +305,113 @@ export function brotliLargeWindowPrefix(): Uint8Array {
   return Uint8Array.of(0x11, 0x00, 0x00, 0x00);
 }
 
+// -- zstd (RFC 8878), spec/generators.md -------------------------------------------------------
+
+export const ZSTD_BLOCK_MAX = 128 * 1024;
+const ZSTD_MAGIC = 0xfd2fb528;
+
+export interface ZstdHeaderFields {
+  singleSegment?: boolean;
+  windowLog?: number; // 10..41; ignored for single-segment frames
+  mantissa?: number; // 0..7
+  reservedBit?: boolean;
+  contentSize?: number | bigint;
+  dictionaryId?: number;
+  checksum?: boolean;
+}
+
+function le(value: number | bigint, bytes: number): number[] {
+  let v = BigInt(value);
+  const out: number[] = [];
+  for (let i = 0; i < bytes; i++) {
+    out.push(Number(v & 0xffn));
+    v >>= 8n;
+  }
+  return out;
+}
+
+/** ZstdHeader.Bytes: magic, descriptor, window descriptor, dictionary id and content size. */
+export function zstdHeader(h: ZstdHeaderFields): Uint8Array {
+  const out = le(ZSTD_MAGIC, 4);
+  let fcsFlag = 0;
+  let fcsField: number[] = [];
+  if (h.contentSize !== undefined) {
+    const size = BigInt(h.contentSize);
+    if (h.singleSegment === true && size <= 255n) {
+      fcsFlag = 0;
+      fcsField = le(size, 1);
+    } else if (size >= 256n && size <= 65791n) {
+      fcsFlag = 1;
+      fcsField = le(size - 256n, 2);
+    } else if (size <= 0xffffffffn) {
+      fcsFlag = 2;
+      fcsField = le(size, 4);
+    } else {
+      fcsFlag = 3;
+      fcsField = le(size, 8);
+    }
+  }
+  let dictFlag = 0;
+  let dictField: number[] = [];
+  if (h.dictionaryId !== undefined) {
+    dictFlag = 3;
+    dictField = le(h.dictionaryId, 4);
+  }
+  let descriptor = (fcsFlag << 6) | dictFlag;
+  if (h.singleSegment === true) descriptor |= 1 << 5;
+  if (h.checksum === true) descriptor |= 1 << 2;
+  if (h.reservedBit === true) descriptor |= 1 << 3;
+  out.push(descriptor);
+  if (h.singleSegment !== true) out.push((((h.windowLog ?? 10) - 10) << 3 | ((h.mantissa ?? 0) & 7)) & 0xff);
+  return Uint8Array.from([...out, ...dictField, ...fcsField]);
+}
+
+function zstdBlockHeader(last: boolean, type: number, size: number): number[] {
+  const value = (size << 3) | (type << 1) | (last ? 1 : 0);
+  return [value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff];
+}
+
+export function zstdBlockMax(h: ZstdHeaderFields): number {
+  if (h.singleSegment === true || (h.windowLog ?? 10) >= 17) return ZSTD_BLOCK_MAX;
+  return 1 << (h.windowLog ?? 10);
+}
+
+/** RLE blocks of up to `blockMax` bytes: 4 bytes per block, 32768:1 at 128 KiB. */
+export function zstdRleBlocks(size: number, blockMax: number, value: number, last: boolean): Uint8Array {
+  const out: number[] = [];
+  for (;;) {
+    const chunk = Math.min(size, blockMax);
+    size -= chunk;
+    out.push(...zstdBlockHeader(last && size === 0, 1, chunk), value);
+    if (size === 0) return Uint8Array.from(out);
+  }
+}
+
+export function zstdRawBlocks(payload: Uint8Array, blockMax: number, last: boolean): Uint8Array {
+  const parts: Uint8Array[] = [];
+  let pos = 0;
+  for (;;) {
+    const chunk = payload.subarray(pos, pos + blockMax);
+    pos += chunk.length;
+    parts.push(Uint8Array.from(zstdBlockHeader(last && pos >= payload.length, 0, chunk.length)), chunk);
+    if (pos >= payload.length) return concat(parts);
+  }
+}
+
+export function zstdZeros(size: number, windowLog: number): Uint8Array {
+  const h = { windowLog };
+  return concat([zstdHeader(h), zstdRleBlocks(size, zstdBlockMax(h), 0, true)]);
+}
+
+export function zstdStored(payload: Uint8Array, windowLog: number): Uint8Array {
+  const h = { windowLog };
+  return concat([zstdHeader(h), zstdRawBlocks(payload, zstdBlockMax(h), true)]);
+}
+
+export function zstdSkippable(n: number): Uint8Array {
+  return concat([Uint8Array.from([...le(0x184d2a50, 4), ...le(n, 4)]), new Uint8Array(n)]);
+}
+
 function zerosStream(codec: string, matches: number): Uint8Array {
   const size = zerosDecodedSize(matches);
   const deflate = zerosDeflate(matches);
@@ -316,6 +423,7 @@ function zerosStream(codec: string, matches: number): Uint8Array {
 
 function wrapOnce(codec: string, payload: Uint8Array, window = 0): Uint8Array {
   if (codec === "br") return brotliStored(payload, window);
+  if (codec === "zstd") return zstdStored(payload, window);
   if (codec === "gzip") return gzipStored(payload);
   if (codec === "zlib") return zlibStored(payload);
   if (codec === "raw") return storedDeflate(payload);
@@ -336,6 +444,7 @@ export function generate(spec: GeneratorSpec): Uint8Array {
   const window = (params["window"] as number | undefined) ?? 0;
   if (kind === "zeros") {
     if (params["codec"] === "br") return brotliZeros(params["size"] as number, window);
+    if (params["codec"] === "zstd") return zstdZeros(params["size"] as number, window);
     return zerosStream(params["codec"] as string, (params["matches"] as number | undefined) ?? 0);
   }
   if (kind === "data") {

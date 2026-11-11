@@ -3,6 +3,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codec as brotli, initBrotli, DEFAULT_MAX_WINDOW_BITS, MIN_WINDOW_BITS } from "spillgate-br";
+import { codec as zstd } from "spillgate-zstd";
 import { runConformance } from "../../core/dist/tests/runner.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -18,8 +19,9 @@ await initBrotli();
 
 runConformance({
   root,
-  noSkips: false, // becomes true once zstd is here as well
+  noSkips: true, // every vector runs: a missing codec fails
   codecs: {
     br: (memoryCap) => (memoryCap === 0 ? brotli() : brotli({ maxWindowBits: windowBitsWithin(memoryCap) })),
+    zstd: (memoryCap) => (memoryCap === 0 ? zstd() : zstd({ maxWindowBytes: memoryCap })),
   },
 });
