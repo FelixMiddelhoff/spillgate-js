@@ -208,6 +208,17 @@ export class Inflater {
 
   private status: Status = NEED_INPUT;
 
+  /** Start a new stream with the same memory (the next gzip member): no allocation. */
+  reset(): void {
+    this.state = BLOCK_HEADER;
+    this.final = false;
+    this.bitBuf = 0;
+    this.bitCount = 0;
+    this.windowPos = 0;
+    this.windowFilled = 0;
+    this.status = NEED_INPUT;
+  }
+
   /** Whole input bytes that were read into the bit buffer but are not part of the stream. */
   leftover(): Uint8Array {
     if (this.state !== FINISHED) return EMPTY;
@@ -477,7 +488,7 @@ export class Inflater {
 
   private finishDynamicTables(): void {
     if ((this.lengths[256] as number) === 0) this.corrupt("missing end-of-block code");
-    if (!buildTable(this.lengths, 0, this.literalCount, this.dynamicLiteral, false)) {
+    if (!buildTable(this.lengths, 0, this.literalCount, this.dynamicLiteral, true)) {
       this.corrupt("invalid literal/length code lengths");
     }
     if (!buildTable(this.lengths, this.literalCount, this.distanceCount, this.dynamicDistance, true)) {

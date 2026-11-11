@@ -150,6 +150,14 @@ export class InputMeter {
     if (bytes.length > this._consumed) {
       throw new InternalError("unread of more bytes than were taken", { layer: this.layer });
     }
+    // Usual case: the bytes are the ones just before the cursor in the same chunk. Step back
+    // instead of copying the whole look-ahead (a gzip stream of many tiny members hands back its
+    // trailer-adjacent bytes at every member boundary).
+    if (this.pos >= bytes.length && sameBytes(this.buf, this.pos - bytes.length, bytes)) {
+      this.pos -= bytes.length;
+      this._consumed -= bytes.length;
+      return;
+    }
     const rest = this.buf.subarray(this.pos);
     const joined = new Uint8Array(bytes.length + rest.length);
     joined.set(bytes, 0);
@@ -168,16 +176,24 @@ export class InputMeter {
 
   private async readSource(want: number): Promise<Uint8Array | null> {
     try {
-      const chunk: unknown = await this.source.next(want);
+      const pending = this.source.next(want);
+      // A source that never answers must not outlive an abort (SG-R-API-04).
+      const chunk: unknown = await (this.signal === undefined ? pending : this.raceAbort(pending, this.signal));
       if (chunk === null || chunk === undefined) return null;
       if (!(chunk instanceof Uint8Array)) {
         throw this.fail(new InternalError("the source returned something that is not bytes", { layer: this.layer }));
       }
       return chunk;
     } catch (error) {
-      if (error instanceof SpillgateError) {
-        // The source is the previous layer of a chain: its error passes through.
-        this.failure = error;
+      let ours = false;
+      try {
+        ours = error instanceof SpillgateError;
+      } catch {
+        // a hostile thrown value (a revoked Proxy) can make even this check throw: it is a source failure
+      }
+      if (ours) {
+        // The source is the previous layer of a chain, or an abort: its error passes through.
+        this.failure = error as SpillgateError;
         throw error;
       }
       this.sourceError = error;
@@ -185,10 +201,25 @@ export class InputMeter {
     }
   }
 
+  private raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+    const canceled = (): CanceledError => new CanceledError("canceled by the caller", { layer: this.layer, cause: signal.reason });
+    if (signal.aborted) return Promise.reject(canceled());
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => reject(canceled());
+      signal.addEventListener("abort", onAbort, { once: true });
+      promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  }
+
   private fail(error: SpillgateError): SpillgateError {
     this.failure = error;
     return error;
   }
+}
+
+function sameBytes(buffer: Uint8Array, at: number, bytes: Uint8Array): boolean {
+  for (let i = 0; i < bytes.length; i++) if (buffer[at + i] !== bytes[i]) return false;
+  return true;
 }
 
 const EMPTY = new Uint8Array(0);

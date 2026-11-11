@@ -86,7 +86,7 @@ test("Covers: SG-R-MEM-02 - readAll grows with the output, not with maxOutput", 
 test("Covers: SG-R-MEM-02 - a huge read size is capped to one step", async () => {
   const r = reader(gz(Buffer.alloc(1_000_000)), "gzip", LOOSE);
   const chunk = (await r.read(2 ** 40)) as Uint8Array;
-  assert.ok(chunk.length > 0 && chunk.length <= 256 * 1024);
+  assert.ok(chunk.length > 0 && chunk.length <= 64 * 1024);
   assert.equal((await r.readAll()).length, 1_000_000 - chunk.length);
   const fresh = reader(gz(Buffer.alloc(10)), "gzip", LOOSE);
   await assert.rejects(fresh.read(-1), RangeError);
@@ -94,12 +94,12 @@ test("Covers: SG-R-MEM-02 - a huge read size is capped to one step", async () =>
 });
 
 test("Covers: SG-R-MEM-02 - small chunks do not pin the big buffer they were cut from", async () => {
-  // One byte of output per call must not keep a 256 KiB buffer alive per chunk.
+  // One byte of output per call must not keep a 64 KiB buffer alive per chunk.
   const r = reader(gz(Buffer.alloc(50_000)), "gzip", LOOSE);
   const chunk = (await r.read(1)) as Uint8Array;
   assert.equal(chunk.buffer.byteLength, 1);
   const bigChunk = (await r.read(100_000)) as Uint8Array;
-  assert.ok(bigChunk.buffer.byteLength <= 256 * 1024);
+  assert.ok(bigChunk.buffer.byteLength <= 64 * 1024);
 });
 
 test("Covers: SG-R-RDR-03 - empty chunks from an iterable are skipped, not looped on", async () => {

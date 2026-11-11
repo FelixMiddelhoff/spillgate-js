@@ -28,6 +28,12 @@ export type Source =
 /** The internal form: `next(max)` resolves to bytes, `null` (end) or an empty array (no progress). */
 export interface RawSource {
   next(max: number): Promise<Uint8Array | null>;
+  /**
+   * Called when the reader is closed: lets go of what spillgate itself took from the caller. It
+   * never cancels or closes the caller's source (SG-R-RDR-06); for a web stream it releases the lock
+   * that spillgate placed on it.
+   */
+  release?(): void;
 }
 
 export function toRawSource(source: unknown): RawSource {
@@ -37,14 +43,16 @@ export function toRawSource(source: unknown): RawSource {
     throw new TypeError("source must be bytes, an (async) iterable of bytes, a ReadableStream or an object with read(max)");
   }
   const candidate = source as Record<PropertyKey, unknown>;
+  if (typeof (candidate as { getReader?: unknown }).getReader === "function") {
+    // A web stream is read through its own reader (not its async iterator), so that closing the
+    // spillgate reader can release the lock it placed on the stream.
+    return fromStream(source as ReadableStream<Uint8Array>);
+  }
   if (typeof candidate[Symbol.asyncIterator] === "function") {
     return fromIterator((candidate as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]());
   }
   if (typeof candidate[Symbol.iterator] === "function") {
     return fromIterator((candidate as unknown as Iterable<Uint8Array>)[Symbol.iterator]());
-  }
-  if (typeof (candidate as { getReader?: unknown }).getReader === "function") {
-    return fromStream(source as ReadableStream<Uint8Array>);
   }
   if (typeof candidate["read"] === "function") {
     const pull = source as PullSource;
@@ -96,12 +104,22 @@ function fromIterator(iterator: Iterator<Uint8Array> | AsyncIterator<Uint8Array>
 
 function fromStream(stream: ReadableStream<Uint8Array>): RawSource {
   const reader = stream.getReader();
-  return fromIterator({
+  const source = fromIterator({
     async next() {
       const result = await reader.read();
       return result.done ? { done: true, value: undefined } : { done: false, value: result.value };
     },
   });
+  return {
+    next: source.next,
+    release() {
+      try {
+        reader.releaseLock();
+      } catch {
+        // already released
+      }
+    },
+  };
 }
 
 function describe(value: unknown): string {

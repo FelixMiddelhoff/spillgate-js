@@ -20,9 +20,10 @@ import type { InputMeter } from "./meter.js";
 /**
  * The most a guard asks a codec for in one call. It bounds the memory of one step (SG-R-MEM-02)
  * whatever size of buffer the caller reads with; callers get short reads, which every reader
- * contract allows.
+ * contract allows. It is also the tolerance of SG-R-RAT-02 (64 KiB): the ratio is judged once per
+ * step, so the delivered prefix before a `ratio_limit` differs between read sizes by at most this.
  */
-export const MAX_STEP = 256 * 1024;
+export const MAX_STEP = 64 * 1024;
 
 const EMPTY = new Uint8Array(0);
 
@@ -116,10 +117,16 @@ export class LayerGuard implements Readable {
 
   /** An unexpected exception is a codec bug, unless the source caused it. */
   private classify(error: unknown): SpillgateError {
-    if (error instanceof SpillgateError) return error.withLayer(this.layer);
-    const sourceFailure = this.meter.sourceFailure;
-    if (sourceFailure !== undefined) return sourceFailure.withLayer(this.layer);
-    const name = error instanceof Error ? error.constructor.name : typeof error;
-    return new InternalError(`codec threw ${name}`, { layer: this.layer, cause: error });
+    try {
+      if (error instanceof SpillgateError) return error.withLayer(this.layer);
+      const sourceFailure = this.meter.sourceFailure;
+      if (sourceFailure !== undefined) return sourceFailure.withLayer(this.layer);
+      const name = error instanceof Error ? error.constructor.name : typeof error;
+      return new InternalError(`codec threw ${name}`, { layer: this.layer, cause: error });
+    } catch {
+      // Inspecting a hostile thrown value (a revoked Proxy, a getter that throws) can itself
+      // throw; whatever it was, the codec misbehaved.
+      return new InternalError("codec threw a value that cannot be inspected", { layer: this.layer });
+    }
   }
 }

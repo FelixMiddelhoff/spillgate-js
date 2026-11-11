@@ -6,14 +6,14 @@ lengths in the stream). What it does allocate is bounded by constants:
 | Part | Bound |
 | --- | --- |
 | Input meter buffer, per layer | 4 KiB fetched at a time from a pull source; a chunk the producer yields (stream, iterable) is held until used |
-| One decode step, per layer | 256 KiB (`MAX_STEP`), whatever buffer size the caller reads with |
+| One decode step, per layer | 64 KiB (`MAX_STEP`), whatever buffer size the caller reads with |
 | DEFLATE decoder state (gzip, deflate), per layer | about 160 KiB: 32 KiB window and two 64 KiB code tables |
 | gzip header fields | read in pieces of at most 512 bytes; FNAME and FCOMMENT are refused above 512 bytes |
 | Whole-body functions (`decodeAll`, `Decoder.readAll`) | grow with the bytes actually produced; never preallocated from `maxOutput` |
 
 Per layer that is well under 1 MiB; a chain of 16 layers stays under 16 MiB plus the output. A chunk
 that is mostly unused is copied out of its step buffer, so a retained one-byte chunk does not pin
-256 KiB. The tests (`tests/js_traps.test.ts`) measure retained memory with a forced garbage
+64 KiB. The tests (`tests/js_traps.test.ts`) measure retained memory with a forced garbage
 collection before every sample: decoding a 200 MB bomb against a 100 MB limit grows the retained
 memory by less than 16 MiB, and reading one byte at a time costs constant memory.
 

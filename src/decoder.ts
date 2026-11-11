@@ -80,8 +80,10 @@ export class Decoder {
     encodings: string | readonly string[] = [],
     options: ReaderOptions = {},
   ): SpillgateReader {
-    const raw = toRawSource(source);
+    // The header is judged first: a refused Content-Encoding must not touch (or lock) the source
+    // (SG-R-HDR-09).
     const layers = parseContentEncoding(encodings, (name) => this.codecs.has(name), this.limits.maxLayers);
+    const raw = toRawSource(source);
     return this.buildChain(raw, layers, options.signal);
   }
 
@@ -136,9 +138,10 @@ export class Decoder {
           // contained
         }
       }
+      source.release?.();
       throw error;
     }
-    return new SpillgateReader(guard as LayerGuard, firstMeter as InputMeter, this.limits, readers);
+    return new SpillgateReader(guard as LayerGuard, firstMeter as InputMeter, this.limits, readers, source.release);
   }
 
   private newCodecReader(name: string, meter: InputMeter, layer: number): CodecReader {

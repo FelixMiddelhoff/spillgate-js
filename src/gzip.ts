@@ -82,7 +82,7 @@ class GzipReader implements CodecReader {
         this.bodyEnded = true;
       }
       if (inflater.produced > 0) {
-        // A copy when the buffer is mostly unused: a retained small chunk must not pin 256 KiB.
+        // A copy when the buffer is mostly unused: a retained small chunk must not pin a whole step buffer.
         const data = inflater.produced === out.length ? out : out.slice(0, inflater.produced);
         this.crc = crc32(data, this.crc);
         this.size = (this.size + data.length) >>> 0;
@@ -131,7 +131,10 @@ class GzipReader implements CodecReader {
         throw new CorruptError("gzip: header checksum mismatch");
       }
     }
-    this.inflater = new Inflater();
+    // One decoder serves all members of the stream: a fresh one per member would allocate its
+    // window and tables again for every tiny member.
+    if (this.inflater === undefined) this.inflater = new Inflater();
+    else this.inflater.reset();
     return true;
   }
 

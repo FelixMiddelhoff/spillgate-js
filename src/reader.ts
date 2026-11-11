@@ -30,10 +30,11 @@ export class SpillgateReader implements AsyncIterable<Uint8Array> {
     private readonly source: InputMeter,
     private readonly limits: EffectiveLimits,
     private codecs: CodecReader[],
+    private readonly release?: () => void,
   ) {}
 
   /**
-   * Read up to `maxBytes` (and at most one step of 256 KiB, whatever the size). Resolves to `null`
+   * Read up to `maxBytes` (and at most one step of 64 KiB, whatever the size). Resolves to `null`
    * at the end of the data.
    */
   async read(maxBytes: number = MAX_STEP): Promise<Uint8Array | null> {
@@ -43,10 +44,11 @@ export class SpillgateReader implements AsyncIterable<Uint8Array> {
     if (typeof maxBytes !== "number" || Number.isNaN(maxBytes) || maxBytes < 0) {
       throw new RangeError("maxBytes must be a non-negative number");
     }
-    if (maxBytes === 0) return EMPTY;
+    const wanted = Math.min(Math.floor(maxBytes), MAX_STEP);
+    if (wanted === 0) return EMPTY; // also 0.5: a fractional size must never look like the end
     this.busy = true;
     try {
-      const data = await this.top.read(Math.min(Math.floor(maxBytes), MAX_STEP));
+      const data = await this.top.read(wanted);
       if (data.length === 0) {
         this.done = "end";
         return null;
@@ -126,6 +128,11 @@ export class SpillgateReader implements AsyncIterable<Uint8Array> {
       } catch {
         // one failing codec must not stop the others (SG-R-CDC-08)
       }
+    }
+    try {
+      this.release?.();
+    } catch {
+      // releasing the source is best effort
     }
   }
 

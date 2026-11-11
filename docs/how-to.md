@@ -214,7 +214,7 @@ should still be bounded. Reading a Node file as `fs.createReadStream(path)` work
   Whatever you did with them (wrote to a file, fed a parser, stored in a database) must be undone when
   an error comes. Write to a temporary file and rename on success; never commit a partial body.
 
-A single `read(n)` returns at most 256 KiB whatever `n` is. Loop until it resolves to `null`.
+A single `read(n)` returns at most 64 KiB whatever `n` is. Loop until it resolves to `null`.
 `for await` closes the reader for you, also when you leave the loop early.
 
 ### 3.7 Cancellation
