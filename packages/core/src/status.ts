@@ -7,10 +7,10 @@ import { SpillgateError } from "./errors.js";
  *
  * | status | outcome |
  * | --- | --- |
- * | 413 | output, ratio, input or layer limit exceeded |
+ * | 413 | output, ratio, input, layer or memory limit exceeded |
  * | 415 | unsupported content encoding |
  * | 400 | malformed encoding header, corrupt data, failed read of the connection |
- * | 503 | memory limit, canceled |
+ * | 503 | canceled |
  * | 500 | anything else, including `internal` |
  *
  * Returns 0 for `undefined` (no error).
@@ -23,6 +23,7 @@ export function statusFor(error: unknown): number {
     case "ratio_limit":
     case "input_limit":
     case "layer_limit":
+    case "memory_limit":
       return 413;
     case "unsupported_encoding":
       return 415;
@@ -30,7 +31,6 @@ export function statusFor(error: unknown): number {
     case "corrupt":
     case "source_error":
       return 400;
-    case "memory_limit":
     case "canceled":
       return 503;
     default:

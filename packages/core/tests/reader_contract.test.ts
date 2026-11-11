@@ -380,7 +380,7 @@ test("Covers: SG-R-API-05 - statusFor maps every outcome class to an HTTP status
   const expected: [SpillgateError, number][] = [
     [new OutputLimitError("x"), 413], [new RatioLimitError("x"), 413], [new InputLimitError("x"), 413], [new LayerLimitError("x"), 413],
     [new UnsupportedEncodingError("x"), 415], [new MalformedEncodingError("x"), 400], [new CorruptError("x"), 400], [new SourceError("x"), 400],
-    [new MemoryLimitError("x"), 503], [new CanceledError("x"), 503], [new InternalError("x"), 500], [new InvalidLimitsError("x"), 500],
+    [new MemoryLimitError("x"), 413], [new CanceledError("x"), 503], [new InternalError("x"), 500], [new InvalidLimitsError("x"), 500],
   ];
   for (const [error, status] of expected) assert.equal(statusFor(error), status, error.kind);
 });
