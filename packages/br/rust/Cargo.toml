@@ -1,0 +1,26 @@
+[package]
+name = "spillgate-brotli-wasm"
+version = "2.3.2"
+authors = ["Yulong Ming <i@myl7.org>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Brotli decompressor for browsers and web workers with WASM, in about 200KB"
+keywords = ["brotli", "brotli-decompressor", "wasm", "rust"]
+categories = ["wasm"]
+repository = "https://github.com/ustclug-dev/brotli-dec-wasm.git"
+homepage = "https://github.com/ustclug-dev/brotli-dec-wasm"
+documentation = "https://github.com/ustclug-dev/brotli-dec-wasm#readme"
+
+[lib]
+name = "brotli_dec_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2.87"
+brotli-decompressor = { version = "=5.0.0", path = "vendor/brotli-decompressor" }
+console_error_panic_hook = "0.1.7"
+
+# spillgate fork of brotli-dec-wasm 2.3.2 (see NOTES.md): brotli-decompressor is vendored.
+[profile.release]
+opt-level = "s"
+lto = true

@@ -180,9 +180,13 @@ test("Covers: SG-R-HDR-08 SG-I-06 - a decoder without the codec refuses br as un
   await assert.rejects(new Decoder(LOOSE).readAll(compress(DATA), "br"), (e: SpillgateError) => e.kind === "unsupported_encoding");
 });
 
-test("Covers: SG-I-04 - the WebAssembly dependency is pinned to an exact version", () => {
-  const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8")) as { dependencies: Record<string, string> };
-  assert.match(pkg.dependencies["brotli-dec-wasm"] as string, /^\d+\.\d+\.\d+$/, "no range: the exact audited version");
+test("Covers: SG-I-04 - no runtime dependency; the original decoder (differential reference) is pinned to an exact version", () => {
+  const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies: Record<string, string>;
+  };
+  assert.equal(pkg.dependencies, undefined, "the WebAssembly decoder is built from rust/, nothing is installed at runtime");
+  assert.match(pkg.devDependencies["brotli-dec-wasm"] as string, /^\d+\.\d+\.\d+$/, "no range: the exact audited version");
 });
 
 test("Covers: SG-R-CDC-09 - the codec needs initBrotli first", async () => {

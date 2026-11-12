@@ -9,8 +9,9 @@
  * const decoder = new Decoder({ maxOutput: 8 * 1024 * 1024 }, { codecs: { br: codec() } });
  * ```
  *
- * The decoder is the Rust `brotli-decompressor` compiled to WebAssembly (package
- * `brotli-dec-wasm`, pinned to an exact version), treated as untrusted code:
+ * The decoder is the Rust `brotli-decompressor` compiled to WebAssembly (a fork of
+ * `brotli-dec-wasm` 2.3.2 built from the sources in `rust/`, see `rust/NOTES.md`), treated as
+ * untrusted code:
  *
  * - The window size is read from the first byte of the stream and checked against the cap
  *   *before* the library sees a byte (SG-R-CDC-04). The default cap is 2**24 bytes, the RFC
@@ -30,7 +31,7 @@
 
 import { CorruptError, InternalError, InvalidOptionError, MemoryLimitError } from "spillgate";
 import type { Codec, CodecReader, CodecSource } from "spillgate";
-import * as wasm from "brotli-dec-wasm/web";
+import * as wasm from "./native/brotli_dec_wasm.js";
 
 export const DEFAULT_MAX_WINDOW_BITS = 24;
 export const MIN_WINDOW_BITS = 10;
@@ -43,7 +44,7 @@ let initialized = false;
  * Load the WebAssembly module. Call it once before the first {@link codec}.
  *
  * @param module the compiled module or its bytes; without it the module is read from the
- *   installed `brotli-dec-wasm` package (Node, Deno and Bun). In a browser pass the bytes you
+ *   module shipped in this package (Node, Deno and Bun). In a browser pass the bytes you
  *   fetched, for example `await (await fetch(url)).arrayBuffer()`.
  */
 export async function initBrotli(module?: BufferSource | WebAssembly.Module): Promise<void> {
@@ -52,10 +53,9 @@ export async function initBrotli(module?: BufferSource | WebAssembly.Module): Pr
   if (module !== undefined) {
     source = module;
   } else {
-    const url = import.meta.resolve("brotli-dec-wasm/web/bg.wasm");
     const { readFile } = await import("node:fs/promises");
     const { fileURLToPath } = await import("node:url");
-    source = await readFile(fileURLToPath(url));
+    source = await readFile(fileURLToPath(new URL("./native/brotli_dec_wasm_bg.wasm", import.meta.url)));
   }
   wasm.initSync({ module: source });
   initialized = true;
