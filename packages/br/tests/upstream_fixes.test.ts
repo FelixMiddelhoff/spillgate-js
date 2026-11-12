@@ -4,10 +4,8 @@
  * hand-built streams (`upstream_streams.ts`, `hostile.ts`). Step 1 of the rebase to 6.3.1: which of
  * these are reachable here, and what happens. The findings are in `rust/NOTES.md`.
  *
- * Tests that pass document robustness. A test that would fail shows a real bug of the vendored
- * 5.0.0; those are skipped with the reason below and run on demand:
- *
- *     SG_BR_RUN_KNOWN=1 npm test -w spillgate-br
+ * Two of them (693a4a1, 8ed0d7d) were real bugs of 5.0.0 and are backported in
+ * `rust/spillgate-backport.patch`; their strict tests (`corrupt` expected) now run unconditionally.
  *
  * `SG_BR_NATIVE=<file URL of a brotli_dec_wasm.js>` runs the raw-decoder probes against another
  * build (as in `native_diff.test.ts`); the public-API probes always use the shipped module.
@@ -48,7 +46,6 @@ interface Module {
 const fork = (await import(nativeUrl)) as Module;
 const forkExports = fork.initSync({ module: readFileSync(new URL("brotli_dec_wasm_bg.wasm", nativeUrl)) });
 
-const KNOWN: { skip?: string } = process.env["SG_BR_RUN_KNOWN"] ? {} : { skip: "known, fix pending rebase to brotli-decompressor 6.3.1" };
 const LONG: { skip?: string } = process.env["SG_BR_LONG"] ? {} : { skip: "long run: SG_BR_LONG=1" };
 const MIB = 1 << 20;
 const M = 1 << 24; // largest MLEN, and the initial block length of a category with one block type
@@ -216,7 +213,7 @@ const OVERRUNS: Array<[string, Uint8Array]> = [
   ["two meta-blocks, the first overshoots", stream(16, (w) => { compressedBlock(w, { mlen: 8, command: insertCopy(5, 5) }); compressedBlock(w, { mlen: 3, command: insertCopy(3, 0) }); endOfStream(w); })],
 ];
 
-test("Covers: SG-I-05 SG-R-CDC-08 - 693a4a1: a meta-block that exceeds its declared MLEN is corrupt", KNOWN, async () => {
+test("Covers: SG-I-05 SG-R-CDC-08 - 693a4a1: a meta-block that exceeds its declared MLEN is corrupt", async () => {
   const accepted: string[] = [];
   for (const [name, bytes] of OVERRUNS) {
     assert.equal(libbrotli(bytes).ok, false, `${name}: libbrotli accepts it`);
@@ -225,24 +222,24 @@ test("Covers: SG-I-05 SG-R-CDC-08 - 693a4a1: a meta-block that exceeds its decla
   assert.deepEqual(accepted, [], "accepted, though libbrotli refuses them");
 });
 
-test("Covers: SG-I-05 SG-I-09 - 693a4a1 is reachable (see the skipped test above): the outcome of an overshoot is the same for every read size and chunking, and the limits still apply", async () => {
-  // The Rust decoder 5.0.0 only notices a negative remaining MLEN when the ring buffer is written
-  // out, and not at all if everything fits: it delivers the overshoot. libbrotli refuses all of
-  // these (BLOCK_LENGTH_1/2).
+test("Covers: SG-I-05 SG-I-09 - 693a4a1: an overshoot is refused the same way for every read size and chunking, nothing of it is delivered, and the original 2.3.2 still accepts it", async () => {
   for (const [name, bytes] of OVERRUNS) {
-    const lib = libbrotli(bytes);
-    assert.equal(lib.ok, false, name);
+    assert.equal(libbrotli(bytes).ok, false, name);
     const outcomes = await everyWay(bytes);
-    assert.equal(unique(outcomes).length, 1, `${name}: ${unique(outcomes).join(" | ")}`);
-    // (the original decoder and the fork agree, whatever the verdict)
-    assert.deepEqual(raw(fork, bytes, 1 << 30, 65536), raw(original as unknown as Module, bytes, 1 << 30, 65536), name);
+    assert.deepEqual(unique(outcomes).length, 1, `${name}: ${unique(outcomes).join(" | ")}`);
+    assert.equal(outcomes[0]?.kind, "corrupt", name);
+    assert.equal(raw(fork, bytes, 1 << 30, 65536).verdict, "error", name);
+    assert.match(raw(fork, bytes, 1 << 30, 65536).message, /Error code -(9|10)$/, name); // upstream's BLOCK_LENGTH_1/2
   }
-  // the overshoot is one command's copy: at most 2118 + 2**24 bytes per meta-block, and the limits
-  // see every byte
+  // the one allowed difference to the npm original: it delivers the overshoot
+  const orig = raw(original as unknown as Module, OVERRUNS[0]![1], 1 << 30, 65536);
+  assert.equal(orig.verdict, "success");
+  // the limits still win over the format error where they trigger first
   const big = longCopyOverrun(4 * MIB, 24);
-  assert.equal((await api(big, 65536, "whole", { maxOutput: MIB, disableRatioLimit: true })).kind, "output_limit");
+  const capped = await api(big, 65536, "whole", { maxOutput: MIB, disableRatioLimit: true });
+  assert.ok(["output_limit", "corrupt"].includes(capped.kind), capped.kind);
   const ratio = await api(big, 65536, "whole", { maxOutput: 2 ** 30 });
-  assert.equal(ratio.kind, "ratio_limit");
+  assert.ok(["ratio_limit", "corrupt"].includes(ratio.kind), ratio.kind);
   assert.ok(ratio.length <= 1000 * big.length + 64 * 1024 + 65536, String(ratio.length));
 });
 
@@ -282,7 +279,7 @@ const metadata = (w: Bits, padding: number): void => {
   w.raw(Uint8Array.of(1, 2, 3));
 };
 
-test("Covers: SG-I-05 SG-R-CDC-08 - 8ed0d7d: nonzero padding bits after the last compressed meta-block are corrupt", KNOWN, async () => {
+test("Covers: SG-I-05 SG-R-CDC-08 - 8ed0d7d: nonzero padding bits after the last compressed meta-block are corrupt", async () => {
   for (const padding of [1, 0xff]) {
     const bytes = padded((w) => compressedBlock(w, { mlen: 2, command: insertCopy(2, 0), last: true }), padding);
     assert.equal(libbrotli(bytes).ok, false);
@@ -290,16 +287,17 @@ test("Covers: SG-I-05 SG-R-CDC-08 - 8ed0d7d: nonzero padding bits after the last
   }
 });
 
-test("Covers: SG-I-05 SG-I-09 - 8ed0d7d is reachable: nonzero padding after a last compressed meta-block is accepted, the data is intact", async () => {
+test("Covers: SG-I-05 SG-I-09 - 8ed0d7d: zero padding after a last compressed meta-block is valid, nonzero is refused with PADDING_2 and nothing is delivered after it", async () => {
   const valid = padded((w) => compressedBlock(w, { mlen: 2, command: insertCopy(2, 0), last: true }), 0);
+  assert.equal(libbrotli(valid).ok, true);
   const expected = await api(valid);
   assert.equal(expected.kind, "ok");
   assert.equal(expected.length, 2);
   for (const padding of [1, 0xff]) {
     const bytes = padded((w) => compressedBlock(w, { mlen: 2, command: insertCopy(2, 0), last: true }), padding);
     assert.equal(libbrotli(bytes).ok, false, "libbrotli: PADDING_2");
-    const outcomes = await everyWay(bytes);
-    assert.deepEqual(unique(outcomes), [`${expected.kind}:${expected.length}:${expected.hash.slice(0, 8)}`], `padding ${padding}`);
+    assert.match(raw(fork, bytes, 1 << 30, 65536).message, /Error code -15$/);
+    assert.equal(raw(original as unknown as Module, bytes, 1 << 30, 65536).verdict, "success", "the npm original accepts it");
   }
 });
 

@@ -2,7 +2,10 @@
  * Differential tests of the forked WebAssembly decoder (see rust/NOTES.md): the decoder built from
  * this repository, the original `brotli-dec-wasm` 2.3.2 from npm (dev dependency, exact version) and
  * Node's libbrotli must agree. Original and fork: identical verdict, output, consumed input and
- * error message for every input. libbrotli: same output wherever the fork accepts a stream, and no
+ * error message for every input, with ONE allowed difference: the fork backports upstream 693a4a1
+ * (meta-block longer than MLEN) and 8ed0d7d (nonzero padding after the last meta-block), so it
+ * refuses (error -9/-10/-15) streams the original accepts, and only when libbrotli refuses the same
+ * stream with BLOCK_LENGTH_1/2 or PADDING_2. libbrotli: same output wherever the fork accepts a stream, and no
  * stream that libbrotli accepts may be refused by the fork.
  *
  * `SG_BR_NATIVE=<file URL of a brotli_dec_wasm.js>` runs the same tests against another build
@@ -88,7 +91,17 @@ function libbrotli(input: Uint8Array): Buffer | undefined {
   }
 }
 
-const stats = { compared: 0, success: 0, error: 0, truncated: 0, libbrotliRefusesWeAccept: 0 };
+/** libbrotli's error code of a stream it refuses. */
+function libbrotliCode(input: Uint8Array): string {
+  try {
+    zlib.brotliDecompressSync(input);
+    return "";
+  } catch (error) {
+    return String((error as { code?: string }).code);
+  }
+}
+
+const stats = { compared: 0, success: 0, error: 0, truncated: 0, libbrotliRefusesWeAccept: 0, backported: 0 };
 const WHOLE: Array<[number, number]> = [[1 << 30, 65536]];
 const BOTH: Array<[number, number]> = [[1 << 30, 65536], [7, 33]];
 
@@ -97,6 +110,22 @@ function compare(input: Uint8Array, label: string, steps: Array<[number, number]
   for (const [index, [inStep, outStep]] of steps.entries()) {
     const a = drive(original as unknown as Module, input, inStep, outStep);
     const b = drive(fork, input, inStep, outStep);
+    const sameKindOfError = a.verdict === "error" && b.verdict === "error" && b.message !== a.message && /Error code -(9|10|15)$/.test(b.message);
+    if (sameKindOfError) {
+      // both refuse it, the fork names the backported reason (the original noticed later, other code)
+      assert.deepEqual({ ...b, message: "" }, { ...a, message: "" }, `${label}: the fork refuses at another place or with another output`);
+      assert.match(libbrotliCode(input), /BLOCK_LENGTH_[12]|PADDING_[12]/, `${label}: libbrotli: ${libbrotliCode(input)}`);
+      stats.backported++;
+      continue;
+    }
+    if (a.verdict === "success" && b.verdict === "error") {
+      // the only allowed difference: a stream refused for the two backported reasons
+      assert.match(b.message, /Error code -(9|10|15)$/, `${label}: the fork refuses a stream the original accepts, for another reason`);
+      assert.match(libbrotliCode(input.subarray(0, a.consumed)), /BLOCK_LENGTH_[12]|PADDING_2/, `${label}: libbrotli does not refuse it for the same reason`);
+      assert.ok(b.consumed <= a.consumed, label);
+      stats.backported++;
+      continue;
+    }
     assert.deepEqual(b, a, `${label} (in ${inStep}, out ${outStep}): fork differs from the original`);
     stats.compared++;
     stats[a.verdict]++;
@@ -247,5 +276,6 @@ test("Covers: SG-I-05 - random bytes and window-bit patterns", () => {
 
 test("Covers: SG-I-04 - the comparison covered every verdict", () => {
   assert.ok(stats.success > 200 && stats.error > 2000 && stats.truncated > 200, JSON.stringify(stats));
+  assert.ok(stats.backported > 0, "the bit-flip sweeps must hit the backported checks: " + JSON.stringify(stats));
   console.log(`# differential: ${JSON.stringify(stats)}`);
 });

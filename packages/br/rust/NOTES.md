@@ -47,7 +47,7 @@ re-applying `spillgate.patch`, re-running the differential tests and re-checking
     (`vendor\brotli-decompressor\src\...`). A changed remap would change the shipped bytes; not done.
   - Linux (Ubuntu 24.04 under WSL, clean clone of `b23e41a`, rustc 1.98.1 linux-gnu, wasm-bindgen
     0.2.114 `--locked`): `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`, **not**
-    the committed hash. Two Linux builds from different source paths and target directories were
+    the then-committed hash. Two Linux builds from different source paths and target directories were
     byte-identical, so the Linux build is deterministic and path-independent; the difference to the
     committed binary is the Windows paths above.
   - So the committed binary cannot be reproduced on Linux, and the Windows output is not
@@ -61,7 +61,8 @@ re-applying `spillgate.patch`, re-running the differential tests and re-checking
   upstream's "s" was kept.)
 - sha256 of `src/native/brotli_dec_wasm_bg.wasm`:
   - unpatched build of the vendored sources: `e871a61cd56c9fd3f4e7eaae2dda28f58023c9ce83dfd5f6744b239fb1d1e29a` (commit `07c4b3f`)
-  - patched (shipped, built on Linux/WSL Ubuntu 24.04, reproduced by CI on ubuntu-latest): `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`
+  - patched with `spillgate.patch` + `spillgate-backport.patch` (shipped, built on Linux/WSL Ubuntu 24.04, reproduced by CI on ubuntu-latest): `1e5d9cbe1d51f7729baf2a9248ec0e746162a094134f73bf107bbd2749a958e7`
+  - patched with `spillgate.patch` only (previously shipped, 2026-11-12, up to commit `479c631`): `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`
   - patched, built on Windows: `4a6f77a8563cf469bbb4db56ca746f54dcec92d665dc1593c0c38f2e73f03afe` (**superseded**, no longer shipped)
   - for reference, the npm `brotli-dec-wasm` 2.3.2 module: 208,439 bytes (different toolchain and wasm-opt, different bytes expected)
 
@@ -86,15 +87,16 @@ The job pins rustc 1.98.1 (rustup, wasm32 target) and `wasm-bindgen-cli` `=0.2.1
 It never continues on error. The files of build 1 are uploaded as the artifact
 `brotli-wasm-rebuilt-ubuntu` (kept 14 days) on every run, pass or fail.
 
-**Status:** the committed binary was rebuilt on Linux (WSL Ubuntu 24.04, clean clone, two paths,
-byte-identical) on 2026-11-12 and is `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`. The earlier Windows-built binary
+**Status:** the committed binary was rebuilt on Linux (WSL Ubuntu 24.04, copy of `packages/br/rust`,
+two paths and target directories, byte-identical, wasm-bindgen glue and typings unchanged) on
+2026-11-12 after the backport and is `1e5d9cbe1d51f7729baf2a9248ec0e746162a094134f73bf107bbd2749a958e7`; `git show HEAD:packages/br/src/native/brotli_dec_wasm_bg.wasm | sha256sum` gives the same. The earlier Windows-built binary
 (`4a6f77a8...`) is superseded; the shipped bytes changed, the behavior did not (br tests and the
 differential tests were re-run). The job compares against this hash. If a rebuild differs on
 purpose (toolchain bump, patch change): download the artifact `brotli-wasm-rebuilt-ubuntu`, copy its
 four files over `packages/br/src/native/`, update `EXPECTED_SHA256` in `ci.yml` and the list above,
 run `npm test`, add a CHANGELOG line, commit.
 
-## Patch (`spillgate.patch`, 2 files, +32 -10 lines, taken from the Rust port's patch of 5.0.0)
+## Patch 1 (`spillgate.patch`, F3, 2 files, +32 -10 lines, taken from the Rust port's patch of 5.0.0)
 
 `HuffmanTreeGroup::init` (huffman/mod.rs) used to free the table memory of the previous meta-block
 and allocate and zero `ntrees * 1080` entries (up to 256 trees: 1.1 MB per tree group) for every
@@ -109,6 +111,29 @@ Tried and dropped: reusing the two context-map buffers (16 KiB literal, 1 KiB di
 types) between meta-blocks. A hostile shape for it (`hostileBlockTypes`) costs 130 ns per input byte
 before and after the change, i.e. less than the tree shape; the allocation is not where the time
 goes, so the change was not kept (smaller patch to review).
+
+## Patch 2 (`spillgate-backport.patch`, 1 file, +9 lines: two upstream fixes, applied in `vendor/`)
+
+Kept apart from `spillgate.patch` on purpose: that one is our own change (F3, performance, output
+bit-identical); this one is upstream code, backported unchanged in effect from brotli-decompressor
+6.x, so it can be dropped when the vendored crate moves to a release that contains it. Both are
+already applied in the committed `vendor/` tree; the files document them (`git diff` against the
+unpatched crate, commit `07c4b3f`, shows both). `build.sh` applies nothing.
+
+- upstream `8ed0d7d` (nonzero padding after the last meta-block): `BROTLI_STATE_METABLOCK_DONE` set
+  `PADDING_2` but fell through to `BROTLI_STATE_DONE`, which overwrote the result with success.
+  Now `break`s (error code -15, as upstream).
+- upstream `693a4a1` (non-last meta-block must not exceed MLEN): check `meta_block_remaining_len < 0` at
+  the start of `METABLOCK_DONE`, before cleanup; error `FORMAT_BLOCK_LENGTH_2` (-10), as upstream.
+
+Effect: 1,264 of the damaged streams of the differential tests (valid streams with bit flips etc.)
+that the npm original accepts or refuses with another code are now refused with -9/-10/-15; the
+leniency count against libbrotli dropped from 224 to 27. `native_diff.test.ts` allows exactly this
+difference to the original (the original accepts and the fork refuses with -9/-10/-15, or both refuse
+and the fork names one of these codes at the same input and output position) and, in both cases,
+requires libbrotli to refuse the stream with BLOCK_LENGTH_1/2 or PADDING_1/2. Everything else must be
+identical. `upstream_fixes.test.ts` has the strict tests (`corrupt` for every read size and
+chunking; the 6 overshoot shapes and both paddings), no longer skipped.
 
 ## Measured (Node 24, the author's machine, 2026-11-12, best of three, no wasm-opt)
 
@@ -164,18 +189,28 @@ dictionary, metadata callbacks, FFI hardening) are not robustness fixes of this 
 replace the code the F3 patch changes: step 2 has to re-apply and re-measure it.
 
 **Two real bugs of 5.0.0, both strictness (parser differential, no memory or CPU effect):**
-693a4a1 and 8ed0d7d. The libbrotli, andybalholm/brotli and 6.3.1 decoders reject what this one
-delivers. Severity low to medium. The strict tests (`corrupt` expected) are skipped with the reason
-"known, fix pending rebase to brotli-decompressor 6.3.1"; run them with `SG_BR_RUN_KNOWN=1`: they fail
-today (all 6 overshoot shapes, both paddings).
+693a4a1 and 8ed0d7d. The libbrotli, andybalholm/brotli and 6.3.1 decoders rejected what 5.0.0
+delivers. Severity low to medium. **Fixed 2026-11-12** by `spillgate-backport.patch` (see "Patch 2");
+the strict tests (`corrupt` expected) run unconditionally and pass. The "Observed" column above
+describes the unpatched 5.0.0.
 
-**What a trap would cost (none is reachable; measured with an artificial one, output step of 4 GiB):**
-the panic aborts without unwinding, so the shadow stack of the call is never given back. The module
-stays usable, the trapped decoder object is lost (`free()` throws "borrowed", so `BrotliReader.close()`
-would throw a foreign error), and after about 3,230 traps every call fails with "memory access out of
-bounds", the glue's finalizers throw uncaught exceptions and the process ends. `BrotliReader.read`
-reports a trap as `memory_limit` (SG-R-CDC-08 asks for `internal`). Hardening for step 2: classify
-traps as `internal`, catch `free()` in `close()`, treat a trap as "module poisoned".
+**What a trap costs, and what is done about it (hardening, 2026-11-12):** none is reachable (measured
+with an artificial one: output step 4 GiB - 1, a `capacity overflow` panic). The panic aborts without
+unwinding, so the shadow stack of the call is never given back, the trapped decoder object stays
+"borrowed" (`free()` throws), and after about 3,230 traps every call fails with "memory access out of
+bounds" and the glue's finalizers throw uncaught exceptions. `src/index.ts` now: reports a trap as
+`internal` (SG-R-CDC-08; it was `memory_limit`), marks the reader dead (further reads: `internal`),
+detaches the glue's finalizer of the lost handle (`__destroy_into_raw`, so garbage collection never
+throws) and leaks the handle, makes `close()` never throw, counts traps per module instance and, after
+`TRAPS_PER_INSTANCE` (256) traps, gives new streams a fresh instance (the glue keeps its instance in
+module state, so it is imported again under another URL and initialised from the compiled module;
+streams already open keep their instance). Cost: a replaced instance stays referenced by its module
+record (one per 256 traps; Node does not unload modules), so the leak is bounded to about one
+instance per 256 traps instead of a dead process. Needs dynamic `import()` with a query string
+(Node, Deno, Bun; a bundler that rewrites it gets `internal` "could not be replaced" at the 256th trap
+instead). `tests/trap.test.ts` simulates traps (test hook `_test.outputStep`): 5,000 traps with a
+decoder open across them, then normal decoding, no uncaught exception; without the replacement it fails
+(checked).
 
 **Checked incidentally:** output beyond 4 GiB is exact with 5.0.0 (5 GiB of zeros, `SG_BR_LONG=1`):
 the 32-bit `usize` counters wrap consistently. 6.0.0 (b1d31a8) used checked `usize` arithmetic there,

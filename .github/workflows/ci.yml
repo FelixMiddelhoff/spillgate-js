@@ -59,7 +59,7 @@ jobs:
       # Exact pins: the committed binary was built with these versions.
       RUSTUP_TOOLCHAIN: "1.98.1"
       WASM_BINDGEN_VERSION: "0.2.114"
-      EXPECTED_SHA256: "3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad"
+      EXPECTED_SHA256: "1e5d9cbe1d51f7729baf2a9248ec0e746162a094134f73bf107bbd2749a958e7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
