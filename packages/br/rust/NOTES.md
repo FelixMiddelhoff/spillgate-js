@@ -138,6 +138,49 @@ Known difference, not changed: the Rust decoder (original and fork) accepts 224 
 streams that libbrotli refuses (padding bits and similar leniency).
 `SG_BR_NATIVE=<file URL>` runs the tests against another build.
 
+## Upstream fixes 5.0.1 .. 6.3.1 (step 1 of the rebase: probed, nothing changed)
+
+`tests/upstream_fixes.test.ts` (+ `tests/upstream_streams.ts`, hand-built streams with one-symbol prefix
+codes) probes each robustness fix of brotli-decompressor after 5.0.0 against the shipped decoder
+through the public API (read sizes 1..65536, source chunkings whole / 1 / 3 / 4096 / "no progress"
+pull source, limits), against libbrotli, and against the original 2.3.2. The vendored code is built
+without the `unsafe` feature, so every index is bounds-checked: a bug of this kind is a Rust panic
+(a WebAssembly `unreachable` trap), never an out-of-bounds write.
+
+| Upstream | In 5.0.0 | Reachable here | Observed |
+|---|---|---|---|
+| 693a4a1 meta-block exceeds MLEN | yes | **yes** | accepted, the overshoot is delivered (12 bytes for MLEN 8; 1 MiB for MLEN 8); libbrotli: BLOCK_LENGTH_1/2. Only caught when the ring buffer is written (a last meta-block, or a copy across the ring end, is already `corrupt`). Same result for every read size/chunking; `maxOutput` and the ratio limit see every byte. |
+| 8ed0d7d padding after the last meta-block | yes | **yes** | nonzero padding after a last, non-empty compressed meta-block is accepted, data intact; libbrotli: PADDING_2. (Empty last block, stored and metadata blocks: already `corrupt`.) |
+| 677eef1 PADDING_1 vs PADDING_2 | error code only | n/a | both are `corrupt` (-15) here |
+| cc7ee0e block switch with one block type | yes | no | needs a 2^24+1-th literal: the overlong insert exceeds MLEN and is refused (BLOCK_LENGTH_1) at the first ring-buffer write, for windows 10..24, last/not last, split over two commands; command/distance categories cannot get there (2 bytes per command). No hang, no trap. libbrotli not run on these shapes (the bug is in the C decoder). |
+| 8cb69d1 unsigned clamp | yes | no | needs 2^31 unread input bytes in one call; the codec hands the decoder at most 4096 (output step at most 65536). Stored meta-blocks (4 MiB, windows 10/16/24, all chunkings) are exact. |
+| c1f6944, c31d20b input/output cursor ranges | yes | no | same reason (2^32) |
+| 79404c1 tree groups on FORMAT_DISTANCE | yes | no | the largest distance the format can write (NPOSTFIX 3, NDIRECT 120, 24 extra bits, about 5.4e8) is below 0x7FFFFFFC; only large-window mode gets there and that is refused. Error paths after 512 trees: module memory stays flat over 400 decoders. |
+| b1d31a8 and the other panic fixes | internal invariants | no trap found | 40,000 mutated/random streams in the test, 1.6 million offline (4 seeds, header-valid random bodies, mutated real and hostile streams, truncations, raw steps 1..65536): no trap, no stall, module memory at most 30 MiB, public API only `ok`/`corrupt`. |
+| 84930b7, 775b42b allocation failure checks | abort | not probed | an allocation failure in WebAssembly is an abort (trap); only memory exhaustion (many open decoders with a 16 MiB window against 4 GiB) could get there. 6.x reports ERROR_ALLOC_* instead. |
+
+Other 6.x changes (dynamic ring buffer, tree storage grown on demand, command loop rewrites, custom
+dictionary, metadata callbacks, FFI hardening) are not robustness fixes of this decoder, but they
+replace the code the F3 patch changes: step 2 has to re-apply and re-measure it.
+
+**Two real bugs of 5.0.0, both strictness (parser differential, no memory or CPU effect):**
+693a4a1 and 8ed0d7d. The libbrotli, andybalholm/brotli and 6.3.1 decoders reject what this one
+delivers. Severity low to medium. The strict tests (`corrupt` expected) are skipped with the reason
+"known, fix pending rebase to brotli-decompressor 6.3.1"; run them with `SG_BR_RUN_KNOWN=1`: they fail
+today (all 6 overshoot shapes, both paddings).
+
+**What a trap would cost (none is reachable; measured with an artificial one, output step of 4 GiB):**
+the panic aborts without unwinding, so the shadow stack of the call is never given back. The module
+stays usable, the trapped decoder object is lost (`free()` throws "borrowed", so `BrotliReader.close()`
+would throw a foreign error), and after about 3,230 traps every call fails with "memory access out of
+bounds", the glue's finalizers throw uncaught exceptions and the process ends. `BrotliReader.read`
+reports a trap as `memory_limit` (SG-R-CDC-08 asks for `internal`). Hardening for step 2: classify
+traps as `internal`, catch `free()` in `close()`, treat a trap as "module poisoned".
+
+**Checked incidentally:** output beyond 4 GiB is exact with 5.0.0 (5 GiB of zeros, `SG_BR_LONG=1`):
+the 32-bit `usize` counters wrap consistently. 6.0.0 (b1d31a8) used checked `usize` arithmetic there,
+which (from the diff, not run) refuses such streams on wasm32; 6.3.1 uses `u64`. Keep that test for the rebase.
+
 ## Maintenance
 
 - Advisories for `brotli-decompressor`, `brotli-dec-wasm` and wasm-bindgen are **not** tracked by
