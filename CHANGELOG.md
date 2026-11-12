@@ -4,6 +4,10 @@ Versions below 1.0 may still change the API.
 
 ## Unreleased
 
+## 0.1.4 - 2026-11-12
+
+All three packages (`spillgate`, `spillgate-br`, `spillgate-zstd`).
+
 - `spillgate-br`: **stricter brotli parsing, two upstream fixes backported** into the vendored decoder (`rust/spillgate-backport.patch`, brotli-decompressor `8ed0d7d` and `693a4a1`): a stream whose last meta-block is followed by nonzero padding bits, or whose non-last meta-block produces more than its declared MLEN, is now `corrupt` (it was accepted before; libbrotli refuses both). Valid streams are unaffected. Differential tests: the only allowed difference to the npm original is a stream refused for these two reasons, and libbrotli agrees (leniency against libbrotli 224 -> 27 damaged streams). New WebAssembly sha256 `1e5d9cbe...` (CI updated).
 - `spillgate-br`: a WebAssembly trap (a Rust panic; none is known to be reachable) is now reported as `internal` (SG-R-CDC-08), not `memory_limit`; `close()` after a trap never throws; after 256 traps new streams get a fresh module instance instead of the process dying after about 3,230 traps.
 
