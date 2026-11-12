@@ -36,6 +36,22 @@ re-applying `spillgate.patch`, re-running the differential tests and re-checking
   The path remapping is meant to make the output independent of the checkout location. Repeated
   builds on the build machine gave the same hash; a build from another directory, another OS or
   another rustc was not checked.
+
+  **Checked on 2026-11-12, and it is less than that sentence suggests:**
+  - Windows (the build machine), copy of this directory at another path with another target
+    directory: byte-identical to the committed files (wasm, glue, typings). Repository paths are
+    remapped.
+  - `CARGO_HOME` is **not** remapped on Windows: `build.sh` passes `$HOME/.cargo` in Git Bash form
+    (`/c/Users/...`), cargo embeds `C:\Users\...\.cargo\registry\src\...`. The committed binary still
+    contains those Windows paths, and the vendored crate's paths keep backslashes
+    (`vendor\brotli-decompressor\src\...`). A changed remap would change the shipped bytes; not done.
+  - Linux (Ubuntu 24.04 under WSL, clean clone of `b23e41a`, rustc 1.98.1 linux-gnu, wasm-bindgen
+    0.2.114 `--locked`): `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`, **not**
+    the committed hash. Two Linux builds from different source paths and target directories were
+    byte-identical, so the Linux build is deterministic and path-independent; the difference to the
+    committed binary is the Windows paths above.
+  - So the committed binary cannot be reproduced on Linux, and the Windows output is not
+    OS-independent. See "Reproducing the binary in CI" below.
 - Upstream builds with `wasm-pack build -t web`, which runs `wasm-opt` and then minifies the glue
   code with esbuild. **wasm-pack, wasm-opt and esbuild were not used here** (not installed; no tool
   was installed beyond rustc, the wasm32 target and wasm-bindgen-cli). So the module is not
@@ -50,7 +66,36 @@ re-applying `spillgate.patch`, re-running the differential tests and re-checking
 
 The committed binary is the release artifact. `npm run build` copies `src/native` to `dist/src/native`;
 nothing is compiled at install time and the package has no runtime dependencies. To check a
-checkout: run `build:wasm` and compare the hash (same rustc and wasm-bindgen versions needed).
+checkout on Windows: run `build:wasm` and compare the hash (same rustc and wasm-bindgen versions
+needed). On Linux the hash differs (see above); use the CI result.
+
+## Reproducing the binary in CI (job `brotli-wasm`, `.github/workflows/ci.yml`)
+
+The job pins rustc 1.98.1 (rustup, wasm32 target) and `wasm-bindgen-cli` `=0.2.114 --locked`, then:
+
+1. builds `build.sh` into a fresh target directory (`wasm-1`),
+2. builds again from a copy of `packages/br/rust` at another path, with another target directory
+   (`wasm-2`),
+3. fails unless: the committed binary's hash is the `EXPECTED_SHA256` constant in `ci.yml`;
+   build 1 and build 2 are identical (determinism); build 1 equals the committed binary; the glue
+   and typings are identical too.
+
+It never continues on error. The files of build 1 are uploaded as the artifact
+`brotli-wasm-rebuilt-ubuntu` (kept 14 days) on every run, pass or fail.
+
+**Expected first result:** steps 1 and 2 agree (checked locally on Linux), but step 3 fails on the
+binary comparison, because the committed binary was built on Windows (`3be7ab72...` on Linux, see
+above). Until the binary is rebuilt on Linux, the job is red and must not be a required check.
+To fix it (a decision for the maintainer: the shipped bytes change, the behavior does not):
+
+1. Download the artifact `brotli-wasm-rebuilt-ubuntu` from the failing run and unzip it into a new
+   folder. Its `brotli_dec_wasm_bg.wasm` must have the hash that both builds printed in the log.
+2. Copy its four files over `packages/br/src/native/`.
+3. `npm test` must pass unchanged (conformance, the 22,164 differential comparisons, the F3 timing
+   tests), then `npm run build`.
+4. Put the new hash in `EXPECTED_SHA256` (`ci.yml`) and in the list above, add a CHANGELOG line, and
+   commit. From then on the Linux build in CI is the reference. Reproduce it locally on Linux or WSL
+   with `bash packages/br/rust/build.sh` and the same rustc and wasm-bindgen versions.
 
 ## Patch (`spillgate.patch`, 2 files, +32 -10 lines, taken from the Rust port's patch of 5.0.0)
 
