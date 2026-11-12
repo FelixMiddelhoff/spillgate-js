@@ -8,6 +8,7 @@ import { test } from "node:test";
 import zlib from "node:zlib";
 import { Decoder, InvalidOptionError, SpillgateError, type Limits } from "spillgate";
 import { brotliLargeWindowPrefix, brotliStored, brotliZeros, data } from "spillgate-test-support";
+import { hostileBrotli } from "./hostile.js";
 import { DEFAULT_MAX_WINDOW_BITS, MIN_WINDOW_BITS, codec, initBrotli, windowBits } from "../src/index.js";
 
 await initBrotli();
@@ -188,4 +189,64 @@ test("Covers: SG-R-CDC-09 - the codec needs initBrotli first", async () => {
   // a fresh module instance has not been initialized
   const fresh = await import(`../src/index.js?fresh=${Date.now()}`);
   assert.throws(() => fresh.codec(), InvalidOptionError);
+});
+
+test("Covers: SG-R-RDR-01 SG-I-09 - a source error late in the stream gives the same prefix for every read size and source chunking", async () => {
+  const stream = compress(Buffer.from(data(9, 60_000)));
+  const outer = zlib.gzipSync(stream);
+  for (const [encodings, bytes] of [["br", stream], ["br, gzip", outer]] as const) {
+    for (const fraction of [0.4, 0.95]) {
+      const failAt = Math.floor(bytes.length * fraction);
+      const results = new Set<string>();
+      for (const readSize of [1, 5, 4096, 1 << 20]) {
+        for (const step of [3, 700, 70_000]) {
+          if (readSize === 1 && failAt > 6_000) continue; // keep the run time sane
+          let pos = 0;
+          const source = { read: (max: number) => {
+            if (pos >= failAt) throw new Error("boom");
+            const end = Math.min(pos + Math.min(max, step), failAt);
+            const chunk = bytes.subarray(pos, end);
+            pos = end;
+            return chunk;
+          } };
+          const reader = decoder().reader(source, encodings);
+          const parts: Buffer[] = [];
+          let kind = "ok";
+          try {
+            for (let c = await reader.read(readSize); c !== null; c = await reader.read(readSize)) parts.push(Buffer.from(c));
+          } catch (error) {
+            kind = error instanceof SpillgateError ? error.kind : "foreign";
+          } finally {
+            reader.close();
+          }
+          const all = Buffer.concat(parts);
+          results.add(`${kind}:${all.length}:${zlib.crc32(all)}`);
+        }
+      }
+      assert.equal(results.size, 1, `${encodings} @${fraction}: ${[...results].join(" | ")}`);
+      assert.match([...results][0] as string, /^source_error:/);
+    }
+  }
+});
+
+test("Covers: SG-R-CDC-04 SG-R-LAY-02 - CPU of many tiny hostile meta-blocks with 256 prefix codes each (F3 measurement, generous bound)", async () => {
+  // 4000 meta-blocks of one byte each, 394 input bytes each (1.5 MB in all), about 160 microseconds
+  // each in the WebAssembly decoder (measured 0.66 s, about 420 ns per input byte, 2026-11-12).
+  // Neither the ratio nor the output limit can bound this (4000 bytes out); only maxInput and the
+  // caller's AbortSignal can. The bound is a regression guard, not a promise: 30 times the measurement.
+  const stream = hostileBrotli(4000, "single");
+  assert.deepEqual(Buffer.from(zlib.brotliDecompressSync(stream)), Buffer.alloc(4000, 0x41), "the stream is valid");
+  const started = performance.now();
+  const [kind, out] = await run(stream, "br", { maxOutput: 1 << 20, disableRatioLimit: true });
+  const ms = performance.now() - started;
+  assert.deepEqual([kind, out.length], ["ok", 4000]);
+  assert.ok(ms < 20_000, `${ms.toFixed(0)} ms for ${stream.length} input bytes (${((ms * 1e6) / stream.length).toFixed(0)} ns per byte)`);
+  // maxInput bounds it: the same stream with a small cap stops early.
+  assert.equal((await run(stream, "br", { maxOutput: 1 << 20, disableRatioLimit: true, maxInput: 100_000 }))[0], "input_limit");
+  // the ratio limit does not (output is tiny): documented, see docs/memory.md and the threat model
+  assert.equal((await run(stream, "br", { maxOutput: 1 << 20 }))[0], "ok");
+  // with 256 distance prefix codes as well (716 bytes per meta-block) the cost per input byte is lower
+  const both = hostileBrotli(1000, "single", true);
+  assert.equal(zlib.brotliDecompressSync(both).length, 1000, "the stream is valid");
+  assert.deepEqual((await run(both, "br", { maxOutput: 1 << 20, disableRatioLimit: true }))[0], "ok");
 });

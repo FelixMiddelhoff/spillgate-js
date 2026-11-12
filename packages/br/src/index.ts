@@ -109,10 +109,12 @@ class BrotliReader implements CodecReader {
     if (this.stream === undefined) await this.start();
     const stream = this.stream as wasm.DecompressStream;
     const outputSize = Math.min(max, MAX_OUTPUT_STEP);
+    let sourceEnded = false;
     for (;;) {
-      let view = this.meter.view();
-      if (view.length === 0 && (await this.meter.fill())) view = this.meter.view();
-      const sourceEnded = view.length === 0;
+      // The decoder may hold output for bytes it already took: it gets a step with the bytes at
+      // hand, even none, before the source is asked again, so what a read delivers before a
+      // source error does not depend on the read size.
+      const view = this.meter.view();
 
       let result: wasm.BrotliStreamResult;
       try {
@@ -149,8 +151,9 @@ class BrotliReader implements CodecReader {
         return output;
       }
       if (output.length > 0) return output;
-      if (code === wasm.BrotliStreamResultCode.NeedsMoreInput && sourceEnded) {
-        throw new CorruptError("brotli: the stream ends too early");
+      if (code === wasm.BrotliStreamResultCode.NeedsMoreInput && view.length === 0) {
+        if (sourceEnded) throw new CorruptError("brotli: the stream ends too early");
+        if (!(await this.meter.fill())) sourceEnded = true;
       }
       // NeedsMoreInput with more to fetch, or NeedsMoreOutput that produced nothing yet: go on.
     }

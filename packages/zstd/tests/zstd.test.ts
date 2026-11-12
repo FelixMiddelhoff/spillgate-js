@@ -345,3 +345,38 @@ test("Covers: SG-R-CDC-05 - a Huffman tree without two weight-one symbols is cor
   assert.equal(oracle(frame), undefined);
   assert.equal((await run(frame))[0], "corrupt");
 });
+
+test("Covers: SG-R-RDR-01 SG-I-09 - a source error late in the stream gives the same prefix for every read size and source chunking", async () => {
+  const stream = compress(Buffer.from(data(9, 400_000)), 3);
+  for (const fraction of [0.4, 0.95]) {
+    const failAt = Math.floor(stream.length * fraction);
+    const results = new Set<string>();
+    for (const readSize of [1, 5, 4096, 1 << 20]) {
+      for (const step of [3, 700, 70_000]) {
+        if (readSize === 1 && failAt > 6_000) continue; // keep the run time sane
+        let pos = 0;
+        const source = { read: (max: number) => {
+          if (pos >= failAt) throw new Error("boom");
+          const end = Math.min(pos + Math.min(max, step), failAt);
+          const chunk = stream.subarray(pos, end);
+          pos = end;
+          return chunk;
+        } };
+        const reader = decoder().reader(source, "zstd");
+        const parts: Buffer[] = [];
+        let kind = "ok";
+        try {
+          for (let c = await reader.read(readSize); c !== null; c = await reader.read(readSize)) parts.push(Buffer.from(c));
+        } catch (error) {
+          kind = error instanceof SpillgateError ? error.kind : "foreign";
+        } finally {
+          reader.close();
+        }
+        const all = Buffer.concat(parts);
+        results.add(`${kind}:${all.length}:${zlib.crc32(all)}`);
+      }
+    }
+    assert.equal(results.size, 1, `@${fraction}: ${[...results].join(" | ")}`);
+    assert.match([...results][0] as string, /^source_error:/);
+  }
+});

@@ -66,15 +66,12 @@ class GzipReader implements CodecReader {
   private async inflateStep(max: number): Promise<Uint8Array> {
     const inflater = this.inflater as Inflater;
     const out = new Uint8Array(max);
+    let ended = false;
     for (;;) {
-      let view = this.meter.view();
-      let ended = false;
-      if (view.length === 0) {
-        // The decoder may still have output pending from bits it already holds (the rest of a
-        // match), so it gets a step with no new input before the stream counts as truncated.
-        if (await this.meter.fill()) view = this.meter.view();
-        else ended = true;
-      }
+      // The decoder may hold output from bits it already has (the rest of a match, symbols in its
+      // bit buffer): it gets a step with the bytes at hand, even none, before the source is asked
+      // again, so what a read delivers before a source error does not depend on the read size.
+      const view = this.meter.view();
       let status;
       try {
         status = inflater.step(view, out);
@@ -95,9 +92,9 @@ class GzipReader implements CodecReader {
         return data;
       }
       if (status === DONE) return EMPTY;
-      if (status === NEED_INPUT) {
+      if (status === NEED_INPUT && view.length === 0) {
         if (ended) throw new CorruptError("gzip: the stream ends too early");
-        continue;
+        if (!(await this.meter.fill())) ended = true;
       }
     }
   }

@@ -4,6 +4,8 @@ Versions below 1.0 may still change the API.
 
 ## Unreleased
 
+- `spillgate`, `spillgate-br`: the bytes delivered before a source error late in the stream no longer depend on the caller's read size or the source's chunking. A codec used to ask the source for more input before it had emitted the output it could already produce from bytes it held, so a small read could lose up to a few bytes the same stream would deliver with a larger read (found by the new F1 test, cross-port finding from the Java review). `spillgate-zstd` was already independent (block-granular).
+- Documented residual risk (`spillgate-br`): many tiny meta-blocks that each declare 256 literal prefix codes cost about 360-390 ns per input byte in the WebAssembly decoder (4000 meta-blocks, 1.5 MB in, 4000 bytes out: about 0.6 s). Neither the output nor the ratio limit can fire; `maxInput` and the caller's `AbortSignal` bound it. Regression test with a generous bound added.
 - `maxInput` (SG-R-INP-01, corpus 0.2.0): only taking the byte after `maxInput` is `input_limit`; looking at it is not. A complete stream of exactly `maxInput` bytes followed by more data is now `corrupt` (gzip, deflate, brotli, zstd: trailing data, as without a limit), where it used to be `input_limit`. A codec that needs the byte after the limit to go on still ends in `input_limit` (the count of consumed bytes is checked at the end of every codec step); only a source that really ends there is a truncated stream (`corrupt`). Identity keeps the strict behavior. A byte that could start another gzip member (0x1f) or zstd frame (0x28, 0x50..0x5f) is taken, so it is `input_limit` at `maxInput` = stream length. Conformance corpus 0.2.0 (vectors SG-V-BND-0041 to 0057) is included.
 
 ## 0.1.3 - 2026-11-11
