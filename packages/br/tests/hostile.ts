@@ -85,3 +85,53 @@ export function hostileBrotli(count: number, shape: TreeShape, distanceTrees = f
   w.bits(1, 1); // ISLASTEMPTY
   return w.finish();
 }
+
+/**
+ * `count` meta-blocks of one literal each that announce 256 literal block types (context map of
+ * 16 KiB, 64 context-mode bytes, 256 trees not needed: NTREESL = 1). With `dist` the distance side
+ * announces 256 block types too (context map of 1 KiB). The work per input byte is the allocation
+ * and clearing of the context maps (F3).
+ */
+export function hostileBlockTypes(count: number, dist = false): Uint8Array {
+  const w = new BitWriter();
+  w.bits(0, 1); // WBITS 16
+  const blockTypes256 = (): void => {
+    w.bits(1, 1); // NBLTYPES - 1 = 255: VarLenUint8 with 7 extra bits
+    w.bits(7, 3);
+    w.bits(127, 7);
+    w.bits(1, 2); // block type code: simple, one symbol of 9 bits (alphabet 258)
+    w.bits(0, 2);
+    w.bits(0, 9);
+    w.bits(1, 2); // block count code: simple, one symbol of 5 bits (alphabet 26)
+    w.bits(0, 2);
+    w.bits(0, 5);
+    w.bits(0, 2); // first block count: symbol 0 costs no bits, 2 extra bits: length 1
+  };
+  for (let i = 0; i < count; i++) {
+    w.bits(0, 1); // ISLAST
+    w.bits(0, 2); // MNIBBLES = 4
+    w.bits(0, 16); // MLEN - 1 = 0
+    w.bits(0, 1); // ISUNCOMPRESSED
+    blockTypes256(); // literals
+    w.bits(0, 1); // NBLTYPESI = 1
+    if (dist) blockTypes256();
+    else w.bits(0, 1); // NBLTYPESD = 1
+    w.bits(0, 2); // NPOSTFIX
+    w.bits(0, 4); // NDIRECT
+    for (let t = 0; t < 256; t++) w.bits(0, 2); // context mode of each literal block type
+    w.bits(0, 1); // NTREESL = 1
+    w.bits(0, 1); // NTREESD = 1
+    w.bits(1, 2); // literal code: one symbol
+    w.bits(0, 2);
+    w.bits(0x41, 8);
+    w.bits(1, 2); // insert&copy code: one symbol, 8 = insert 1 literal
+    w.bits(0, 2);
+    w.bits(8, 10);
+    w.bits(1, 2); // distance code: one symbol
+    w.bits(0, 2);
+    w.bits(0, 6);
+  }
+  w.bits(1, 1); // ISLAST
+  w.bits(1, 1); // ISLASTEMPTY
+  return w.finish();
+}

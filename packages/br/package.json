@@ -31,6 +31,8 @@
   "files": [
     "dist/src",
     "README.md",
+    "THIRD-PARTY-NOTICES.md",
+    "licenses",
     "LICENSE"
   ],
   "scripts": {

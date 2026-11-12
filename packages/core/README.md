@@ -18,7 +18,8 @@ try {
 ```
 
 - `Content-Encoding` chains: `gzip` (and `x-gzip`), `deflate`, `identity`. `br` and `zstd` come
-  from the optional packages `spillgate-br` (brotli-dec-wasm, pinned) and `spillgate-zstd` (own
+  from the optional packages `spillgate-br` (a patched fork of
+  brotli-dec-wasm built from vendored sources) and `spillgate-zstd` (own
   bounded decoder); pass them via `new Decoder(limits, { codecs: { br: ..., zstd: ... } })`.
 - `maxOutput` is required. There is no unlimited setting.
 - Every layer is limited, including the intermediate layers of a chain.

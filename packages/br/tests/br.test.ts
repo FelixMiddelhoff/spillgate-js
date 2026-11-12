@@ -8,10 +8,29 @@ import { test } from "node:test";
 import zlib from "node:zlib";
 import { Decoder, InvalidOptionError, SpillgateError, type Limits } from "spillgate";
 import { brotliLargeWindowPrefix, brotliStored, brotliZeros, data } from "spillgate-test-support";
-import { hostileBrotli } from "./hostile.js";
+import { createRequire } from "node:module";
+import * as originalWasm from "brotli-dec-wasm/web";
+import { hostileBlockTypes, hostileBrotli } from "./hostile.js";
 import { DEFAULT_MAX_WINDOW_BITS, MIN_WINDOW_BITS, codec, initBrotli, windowBits } from "../src/index.js";
 
 await initBrotli();
+
+// The original decoder, the reference of the relative timing test: decode a whole stream once.
+const requireHere = createRequire(import.meta.url);
+originalWasm.initSync({ module: readFileSync(requireHere.resolve("brotli-dec-wasm/web/bg.wasm")) });
+async function bestOriginal(stream: Uint8Array): Promise<number> {
+  let fastest = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const started = performance.now();
+    const decoder = new originalWasm.DecompressStream();
+    const result = decoder.decompress(stream, 65536);
+    assert.equal(result.code, originalWasm.BrotliStreamResultCode.ResultSuccess);
+    result.free();
+    decoder.free();
+    fastest = Math.min(fastest, performance.now() - started);
+  }
+  return fastest;
+}
 
 const LOOSE: Limits = { maxOutput: 2 ** 30, disableRatioLimit: true };
 const DATA = Buffer.from(Array.from({ length: 10240 }, (_, i) => i & 255));
@@ -233,24 +252,56 @@ test("Covers: SG-R-RDR-01 SG-I-09 - a source error late in the stream gives the 
   }
 });
 
-test("Covers: SG-R-CDC-04 SG-R-LAY-02 - CPU of many tiny hostile meta-blocks with 256 prefix codes each (F3 measurement, generous bound)", async () => {
-  // 4000 meta-blocks of one byte each, 394 input bytes each (1.5 MB in all), about 160 microseconds
-  // each in the WebAssembly decoder (measured 0.66 s, about 420 ns per input byte, 2026-11-12).
-  // Neither the ratio nor the output limit can bound this (4000 bytes out); only maxInput and the
-  // caller's AbortSignal can. The bound is a regression guard, not a promise: 30 times the measurement.
-  const stream = hostileBrotli(4000, "single");
+test("Covers: SG-R-CDC-04 SG-R-LAY-02 - CPU of many tiny hostile meta-blocks with 256 literal and 256 distance prefix codes each stays linear and below the original decoder (F3)", async () => {
+  // 4000 meta-blocks of one byte each, 716 input bytes each (2.9 MB in all). The original decoder
+  // (brotli-dec-wasm 2.3.2) allocated and cleared 1.1 MB of table memory per meta-block: 1.59 s,
+  // about 555 ns per input byte. The fork keeps the table memory between meta-blocks: 0.66 s,
+  // about 230 ns per input byte (best of three on the author's machine, 2026-11-12, no wasm-opt).
+  // What is left is the work of reading the trees themselves, linear in the input. Neither the
+  // ratio nor the output limit bounds it (4000 bytes out); only maxInput and the caller's
+  // AbortSignal do.
+  const stream = hostileBrotli(4000, "single", true);
   assert.deepEqual(Buffer.from(zlib.brotliDecompressSync(stream)), Buffer.alloc(4000, 0x41), "the stream is valid");
-  const started = performance.now();
-  const [kind, out] = await run(stream, "br", { maxOutput: 1 << 20, disableRatioLimit: true });
-  const ms = performance.now() - started;
-  assert.deepEqual([kind, out.length], ["ok", 4000]);
-  assert.ok(ms < 20_000, `${ms.toFixed(0)} ms for ${stream.length} input bytes (${((ms * 1e6) / stream.length).toFixed(0)} ns per byte)`);
+  const limits: Limits = { maxOutput: 1 << 20, disableRatioLimit: true };
+  const best = async (): Promise<number> => {
+    let fastest = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const started = performance.now();
+      const [kind, out] = await run(stream, "br", limits);
+      fastest = Math.min(fastest, performance.now() - started);
+      assert.deepEqual([kind, out.length], ["ok", 4000]);
+    }
+    return fastest;
+  };
+  const ms = await best();
+  const nsPerByte = (ms * 1e6) / stream.length;
+  // absolute: 2.5 times the measurement (the unpatched build measures 555 ns per byte here)
+  assert.ok(nsPerByte < 600, `${ms.toFixed(0)} ms for ${stream.length} input bytes (${nsPerByte.toFixed(0)} ns per byte)`);
+  // relative to the original decoder in the same process: at least 1.5 times faster (measured 2.4)
+  const originalMs = await bestOriginal(stream);
+  assert.ok(ms * 1.5 < originalMs, `fork ${ms.toFixed(0)} ms, original ${originalMs.toFixed(0)} ms`);
+  // linear: a quarter of the stream costs about a quarter (generous factor 2 for noise and warm-up)
+  const quarter = hostileBrotli(1000, "single", true);
+  const quarterStarted = performance.now();
+  await run(quarter, "br", limits);
+  const quarterMs = performance.now() - quarterStarted;
+  assert.ok(quarterMs * 4 < ms * 2 + 100, `quarter ${quarterMs.toFixed(0)} ms, whole ${ms.toFixed(0)} ms`);
   // maxInput bounds it: the same stream with a small cap stops early.
-  assert.equal((await run(stream, "br", { maxOutput: 1 << 20, disableRatioLimit: true, maxInput: 100_000 }))[0], "input_limit");
+  assert.equal((await run(stream, "br", { ...limits, maxInput: 100_000 }))[0], "input_limit");
   // the ratio limit does not (output is tiny): documented, see docs/memory.md and the threat model
   assert.equal((await run(stream, "br", { maxOutput: 1 << 20 }))[0], "ok");
-  // with 256 distance prefix codes as well (716 bytes per meta-block) the cost per input byte is lower
-  const both = hostileBrotli(1000, "single", true);
-  assert.equal(zlib.brotliDecompressSync(both).length, 1000, "the stream is valid");
-  assert.deepEqual((await run(both, "br", { maxOutput: 1 << 20, disableRatioLimit: true }))[0], "ok");
+});
+
+test("Covers: SG-R-CDC-04 SG-R-LAY-02 - meta-blocks with 256 literal block types (16 KiB context map each) cost no more per byte than the tree shape (F3)", async () => {
+  // measured 130 ns per input byte, with and without the distance side (reusing the map memory
+  // between meta-blocks was tried and measured no faster: the allocation is not the cost)
+  for (const dist of [false, true]) {
+    const stream = hostileBlockTypes(4000, dist);
+    assert.equal(zlib.brotliDecompressSync(stream).length, 4000, "the stream is valid");
+    const started = performance.now();
+    const [kind, out] = await run(stream, "br", { maxOutput: 1 << 20, disableRatioLimit: true });
+    const ns = ((performance.now() - started) * 1e6) / stream.length;
+    assert.deepEqual([kind, out.length], ["ok", 4000]);
+    assert.ok(ns < 600, `${ns.toFixed(0)} ns per input byte (dist ${dist})`);
+  }
 });

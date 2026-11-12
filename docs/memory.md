@@ -35,3 +35,10 @@ header allocates nothing and that a 1 GiB bomb decodes with constant memory.
 streams open at the same time (up to about the window cap each) and does not shrink. When it runs
 out, the stream fails as `memory_limit`. Bound the number of concurrent brotli streams in your
 service (for example 16 MiB window x 64 streams is about 1 GiB) or lower `maxWindowBits`.
+
+CPU, not memory: a brotli stream can consist of thousands of tiny meta-blocks that each announce
+hundreds of prefix codes. The output and ratio limits cannot fire on it (a few bytes come out). The
+decoder in `spillgate-br` is a patched build that keeps its table memory between meta-blocks, so the
+cost is linear in the input: about 230-240 ns per input byte on the author's machine (4000
+meta-blocks with 256 literal and 256 distance codes: 2.9 MB in, 0.66 s; the unpatched decoder needed
+1.6 s). Bound it as for any CPU-heavy input with `maxInput` and an `AbortSignal`.

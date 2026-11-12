@@ -180,6 +180,28 @@ test("Covers: SG-I-04 - hand-built valid streams (stored, zeros, hostile meta-bl
   }
 });
 
+test("Covers: SG-I-04 - many meta-blocks of different kinds in one stream (table memory reused between meta-blocks)", () => {
+  const parts: Buffer[] = [];
+  for (let i = 0; i < 40; i++) {
+    parts.push(i % 4 === 0 ? text(30_000) : i % 4 === 1 ? randomBytes(9_000) : i % 4 === 2 ? Buffer.alloc(5_000, i) : Buffer.from(Array.from({ length: 20_000 }, (_, k) => (k * (i + 3)) & 255)));
+  }
+  const payload = Buffer.concat(parts);
+  for (const [quality, lgwin] of [[1, 10], [3, 16], [5, 16], [9, 18], [11, 16], [11, 24]] as const) {
+    const stream = enc(payload, quality, lgwin);
+    compare(stream, `many meta-blocks q${quality} w${lgwin}`, WHOLE);
+    const verdict = drive(fork, stream, 1 << 30, 65536);
+    assert.equal(verdict.verdict, "success");
+    assert.equal(verdict.length, payload.length);
+    // damaged late in the stream, after table memory has been reused many times
+    for (let i = 0; i < 40; i++) {
+      const copy = Buffer.from(stream);
+      const at = Math.floor(copy.length / 2) + (rnd() % Math.floor(copy.length / 2));
+      copy[at] = (copy[at] as number) ^ (1 << (rnd() & 7));
+      compare(copy, `many meta-blocks q${quality} w${lgwin} flip ${at}`, WHOLE);
+    }
+  }
+});
+
 test("Covers: SG-I-05 - damaged streams: every truncation, every bit flip, byte edits, trailing bytes", () => {
   const seeds = [
     enc(text(1500), 5, 16),
