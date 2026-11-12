@@ -22,7 +22,7 @@ re-applying `spillgate.patch`, re-running the differential tests and re-checking
 ## Toolchain and build
 
 - rustc 1.98.1 (48a229cea 2026-09-01), cargo 1.98.1, target `wasm32-unknown-unknown`
-  (host: Windows 11 x86_64), wasm-bindgen CLI 0.2.114 (equal to the locked crate).
+  (build host: Linux, Ubuntu 24.04 under WSL, x86_64-unknown-linux-gnu; CI builds on ubuntu-latest), wasm-bindgen CLI 0.2.114 (equal to the locked crate).
 - Release profile as upstream (`opt-level = "s"`, `lto = true`).
 - Command (`npm run build:wasm -w spillgate-br`, i.e. `bash rust/build.sh`):
 
@@ -61,13 +61,16 @@ re-applying `spillgate.patch`, re-running the differential tests and re-checking
   upstream's "s" was kept.)
 - sha256 of `src/native/brotli_dec_wasm_bg.wasm`:
   - unpatched build of the vendored sources: `e871a61cd56c9fd3f4e7eaae2dda28f58023c9ce83dfd5f6744b239fb1d1e29a` (commit `07c4b3f`)
-  - patched (shipped): `4a6f77a8563cf469bbb4db56ca746f54dcec92d665dc1593c0c38f2e73f03afe`
+  - patched (shipped, built on Linux/WSL Ubuntu 24.04, reproduced by CI on ubuntu-latest): `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`
+  - patched, built on Windows: `4a6f77a8563cf469bbb4db56ca746f54dcec92d665dc1593c0c38f2e73f03afe` (**superseded**, no longer shipped)
   - for reference, the npm `brotli-dec-wasm` 2.3.2 module: 208,439 bytes (different toolchain and wasm-opt, different bytes expected)
 
 The committed binary is the release artifact. `npm run build` copies `src/native` to `dist/src/native`;
 nothing is compiled at install time and the package has no runtime dependencies. To check a
-checkout on Windows: run `build:wasm` and compare the hash (same rustc and wasm-bindgen versions
-needed). On Linux the hash differs (see above); use the CI result.
+checkout: run `build:wasm` on Linux or WSL (same rustc and wasm-bindgen versions needed) and compare the hash.
+**Windows builds are not byte-reproducible against the shipped binary**: cargo embeds the Windows
+CARGO_HOME and backslash paths that `--remap-path-prefix` does not map (Git Bash path form), so a
+Windows build has another hash with identical behavior. Use Linux/WSL or the CI artifact.
 
 ## Reproducing the binary in CI (job `brotli-wasm`, `.github/workflows/ci.yml`)
 
@@ -83,19 +86,13 @@ The job pins rustc 1.98.1 (rustup, wasm32 target) and `wasm-bindgen-cli` `=0.2.1
 It never continues on error. The files of build 1 are uploaded as the artifact
 `brotli-wasm-rebuilt-ubuntu` (kept 14 days) on every run, pass or fail.
 
-**Expected first result:** steps 1 and 2 agree (checked locally on Linux), but step 3 fails on the
-binary comparison, because the committed binary was built on Windows (`3be7ab72...` on Linux, see
-above). Until the binary is rebuilt on Linux, the job is red and must not be a required check.
-To fix it (a decision for the maintainer: the shipped bytes change, the behavior does not):
-
-1. Download the artifact `brotli-wasm-rebuilt-ubuntu` from the failing run and unzip it into a new
-   folder. Its `brotli_dec_wasm_bg.wasm` must have the hash that both builds printed in the log.
-2. Copy its four files over `packages/br/src/native/`.
-3. `npm test` must pass unchanged (conformance, the 22,164 differential comparisons, the F3 timing
-   tests), then `npm run build`.
-4. Put the new hash in `EXPECTED_SHA256` (`ci.yml`) and in the list above, add a CHANGELOG line, and
-   commit. From then on the Linux build in CI is the reference. Reproduce it locally on Linux or WSL
-   with `bash packages/br/rust/build.sh` and the same rustc and wasm-bindgen versions.
+**Status:** the committed binary was rebuilt on Linux (WSL Ubuntu 24.04, clean clone, two paths,
+byte-identical) on 2026-11-12 and is `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`. The earlier Windows-built binary
+(`4a6f77a8...`) is superseded; the shipped bytes changed, the behavior did not (br tests and the
+differential tests were re-run). The job compares against this hash. If a rebuild differs on
+purpose (toolchain bump, patch change): download the artifact `brotli-wasm-rebuilt-ubuntu`, copy its
+four files over `packages/br/src/native/`, update `EXPECTED_SHA256` in `ci.yml` and the list above,
+run `npm test`, add a CHANGELOG line, commit.
 
 ## Patch (`spillgate.patch`, 2 files, +32 -10 lines, taken from the Rust port's patch of 5.0.0)
 
