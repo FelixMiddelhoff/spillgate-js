@@ -24,6 +24,11 @@
  *   more input"), and bytes after the last meta-block are `corrupt` (the library reports where the
  *   stream ended).
  * - Result objects of the library live in WebAssembly memory and are freed after every call.
+ * - A WebAssembly trap (a Rust panic: none is known to be reachable) is `internal`, not
+ *   `memory_limit`. The trapped decoder is abandoned (its handle cannot be freed), `close` stays
+ *   silent, and because every trap leaks the shadow stack of the call, the module instance is
+ *   replaced by a fresh one after {@link TRAPS_PER_INSTANCE} traps (streams already open keep
+ *   the instance they started on).
  *
  * WebAssembly memory only grows: after a hostile stream with a 16 MiB window the module keeps that
  * memory for later streams. Lower the cap (`maxWindowBits`) on servers that decode many streams.
@@ -37,8 +42,45 @@ export const DEFAULT_MAX_WINDOW_BITS = 24;
 export const MIN_WINDOW_BITS = 10;
 export const MAX_OUTPUT_STEP = 64 * 1024;
 
+/** Traps after which new streams get a fresh module instance (the shadow stack leaks ~KiB per trap; poisoned at ~3200). */
+export const TRAPS_PER_INSTANCE = 256;
+
+/** Hooks for the tests, not part of the API. */
+export const _test: { outputStep: number | undefined; trapsPerInstance: number; instances: number } = {
+  outputStep: undefined,
+  trapsPerInstance: TRAPS_PER_INSTANCE,
+  instances: 1,
+};
+
+type Glue = typeof wasm;
+/** One instance of the module (glue + WebAssembly instance) and the traps it has seen. */
+interface Instance {
+  glue: Glue;
+  traps: number;
+}
+
 const EMPTY = new Uint8Array(0);
 let initialized = false;
+let compiled: WebAssembly.Module | undefined;
+let current: Instance | undefined;
+let renewing: Promise<Instance> | undefined;
+
+/** A fresh instance of the module: the glue keeps one instance in module state, so it is loaded again under another URL. */
+function renew(): Promise<Instance> {
+  renewing ??= (async () => {
+    try {
+      const glue = (await import(new URL(`./native/brotli_dec_wasm.js?instance=${++_test.instances}`, import.meta.url).href)) as Glue;
+      glue.initSync({ module: compiled as WebAssembly.Module });
+      current = { glue, traps: 0 };
+      return current;
+    } catch {
+      throw new InternalError("brotli: the WebAssembly module could not be replaced after traps; restart the process");
+    } finally {
+      renewing = undefined;
+    }
+  })();
+  return renewing;
+}
 
 /**
  * Load the WebAssembly module. Call it once before the first {@link codec}.
@@ -57,7 +99,9 @@ export async function initBrotli(module?: BufferSource | WebAssembly.Module): Pr
     const { fileURLToPath } = await import("node:url");
     source = await readFile(fileURLToPath(new URL("./native/brotli_dec_wasm_bg.wasm", import.meta.url)));
   }
-  wasm.initSync({ module: source });
+  compiled = source instanceof WebAssembly.Module ? source : new WebAssembly.Module(source);
+  wasm.initSync({ module: compiled });
+  current = { glue: wasm, traps: 0 };
   initialized = true;
 }
 
@@ -97,7 +141,9 @@ export function windowBits(first: number): { bits: number; largeWindow: boolean 
 
 class BrotliReader implements CodecReader {
   private stream: wasm.DecompressStream | undefined;
+  private instance: Instance | undefined;
   private ended = false;
+  private trapped = false;
 
   constructor(
     private readonly meter: CodecSource,
@@ -106,9 +152,10 @@ class BrotliReader implements CodecReader {
 
   async read(max: number): Promise<Uint8Array> {
     if (this.ended) return EMPTY;
+    if (this.trapped) throw new InternalError("brotli: the WebAssembly decoder trapped");
     if (this.stream === undefined) await this.start();
     const stream = this.stream as wasm.DecompressStream;
-    const outputSize = Math.min(max, MAX_OUTPUT_STEP);
+    const outputSize = _test.outputStep ?? Math.min(max, MAX_OUTPUT_STEP);
     let sourceEnded = false;
     for (;;) {
       // The decoder may hold output for bytes it already took: it gets a step with the bytes at
@@ -120,9 +167,14 @@ class BrotliReader implements CodecReader {
       try {
         result = stream.decompress(view, outputSize);
       } catch (error) {
-        // A trap or an out-of-range allocation inside WebAssembly is memory running out (the
-        // module's memory is shared by all open streams and never shrinks), not bad data.
-        if (error instanceof WebAssembly.RuntimeError || error instanceof RangeError) {
+        // A trap (a Rust panic) is a bug, not bad data and not a limit: `internal`.
+        if (error instanceof WebAssembly.RuntimeError) {
+          this.abandon();
+          throw new InternalError("brotli: the WebAssembly decoder trapped");
+        }
+        // An out-of-range allocation is memory running out (the module's memory is shared by all
+        // open streams and never shrinks), not bad data.
+        if (error instanceof RangeError) {
           throw new MemoryLimitError("brotli: the WebAssembly decoder ran out of memory");
         }
         throw new CorruptError("brotli: invalid data");
@@ -160,8 +212,29 @@ class BrotliReader implements CodecReader {
   }
 
   close(): void {
-    this.stream?.free();
+    const stream = this.stream;
     this.stream = undefined;
+    try {
+      stream?.free();
+    } catch {
+      // never a foreign error from close: the handle is lost, the instance is replaced when needed
+    }
+  }
+
+  /** After a trap the handle is still "borrowed" inside the module: it can neither be used nor freed. */
+  private abandon(): void {
+    this.trapped = true;
+    const stream = this.stream as unknown as { __destroy_into_raw?: () => number } | undefined;
+    this.stream = undefined;
+    try {
+      stream?.__destroy_into_raw?.(); // detaches the glue's finalizer: it would throw at garbage collection
+    } catch {
+      // nothing more to do
+    }
+    const instance = this.instance;
+    if (instance !== undefined && ++instance.traps >= _test.trapsPerInstance && current === instance) {
+      current = undefined; // the next stream renews it
+    }
   }
 
   private async start(): Promise<void> {
@@ -171,6 +244,7 @@ class BrotliReader implements CodecReader {
     if (bits > this.maxWindowBits) {
       throw new MemoryLimitError(`brotli stream asks for a window of 2**${bits} bytes (the cap is 2**${this.maxWindowBits})`);
     }
-    this.stream = new wasm.DecompressStream();
+    this.instance = current ?? (await renew());
+    this.stream = new this.instance.glue.DecompressStream();
   }
 }
