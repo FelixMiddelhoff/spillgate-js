@@ -27,8 +27,8 @@ The latest release only.
 
 The limits, header parsing, the DEFLATE decoder, gzip and deflate framing, the reader contract,
 the own zstd decoder (`spillgate-zstd`) and the window and input handling around brotli
-(`spillgate-br`) are in scope. `spillgate-br` runs a fork of brotli-dec-wasm 2.3.2 (Rust `brotli-decompressor` 5.0.0 with a
-small patch, built from the sources in `packages/br/rust`, no runtime dependency): flaws inside
+(`spillgate-br`) are in scope. `spillgate-br` runs a fork of brotli-dec-wasm 2.3.2 (wrapper 2.3.2 with Rust `brotli-decompressor` 6.3.1,
+unpatched, built from the sources in `packages/br/rust`, no runtime dependency): flaws inside
 that decoder go upstream (and to us, since we ship the build), but report them to us too if the limiter should have
 contained them. Bugs in the JavaScript engine or in other packages are reported upstream; tell us
 as well if the limiter should have contained them.

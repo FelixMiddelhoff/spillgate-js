@@ -4,8 +4,9 @@
  * hand-built streams (`upstream_streams.ts`, `hostile.ts`). Step 1 of the rebase to 6.3.1: which of
  * these are reachable here, and what happens. The findings are in `rust/NOTES.md`.
  *
- * Two of them (693a4a1, 8ed0d7d) were real bugs of 5.0.0 and are backported in
- * `rust/spillgate-backport.patch`; their strict tests (`corrupt` expected) now run unconditionally.
+ * Two of them (693a4a1, 8ed0d7d) were real bugs of 5.0.0 (the version of the original 2.3.2). The
+ * vendored 6.3.1 has them fixed without a patch; their strict tests (`corrupt` expected) run
+ * unconditionally.
  *
  * `SG_BR_NATIVE=<file URL of a brotli_dec_wasm.js>` runs the raw-decoder probes against another
  * build (as in `native_diff.test.ts`); the public-API probes always use the shipped module.
@@ -313,7 +314,7 @@ test("Covers: SG-I-05 SG-R-CDC-08 - 8ed0d7d 677eef1: nonzero padding before a st
     for (const outcome of await everyWay(bytes)) assert.deepEqual([outcome.kind, outcome.length], ["corrupt", 0], name);
     // 677eef1 (in 6.x) splits the error: PADDING_1 is -14, PADDING_2 is -15; libbrotli is the oracle
     const lib = libbrotli(bytes);
-    const expected = lib.ok ? "" : lib.code === "ERR_BROTLI_DECODER_ERROR_FORMAT_PADDING_1" ? "-14" : lib.code === "ERR_BROTLI_DECODER_ERROR_FORMAT_PADDING_2" ? "-15" : lib.code;
+    const expected = lib.ok ? "" : lib.code.endsWith("PADDING_1") ? "-14" : lib.code.endsWith("PADDING_2") ? "-15" : lib.code;
     assert.match(expected, /^-1[45]$/, `${name}: libbrotli: ${lib.ok ? "ok" : lib.code}`);
     assert.ok(raw(fork, bytes, 1 << 30, 65536).message.endsWith(`Error code ${expected}`), name);
   }

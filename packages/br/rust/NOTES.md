@@ -3,21 +3,20 @@
 `spillgate-br` ships `src/native/brotli_dec_wasm_bg.wasm` and its glue code, built from the sources
 in this directory. It replaces the npm dependency `brotli-dec-wasm` 2.3.2 (kept as an exact-pinned
 **dev** dependency: it is the reference of the differential tests). Reason: F3, the CPU cost of
-hostile meta-blocks (see "Patch" and the threat model).
+hostile meta-blocks (see "Patches" and the threat model). Since 2026-11-13 the decoder is **unpatched
+brotli-decompressor 6.3.1**; the F3 patch and the two backports of the 5.0.0 fork are gone (git history keeps them).
 
 ## Sources
 
 | What | Where | Version / commit |
 |---|---|---|
 | Wrapper (`src/*.rs`, `Cargo.toml`, `Cargo.lock`, licenses) | https://github.com/ustclug-dev/brotli-dec-wasm | tag `v2.3.2`, commit `04947d5b2cbcf0487435d26d6598ea624a6b191b`. Changed: package name `spillgate-brotli-wasm` (lib name `brotli_dec_wasm` unchanged), `brotli-decompressor` as path dependency `=5.0.0`. No source change in `src/*.rs`. |
-| `vendor/brotli-decompressor` | crates.io `brotli-decompressor` | **5.0.0**, upstream commit `a91c112180789502cdb9bf9e87f9546dd9a970fd` (from `.cargo_vcs_info.json`), registry checksum `874bb8112abecc98cbd6d81ea4fa7e94fb9449648c93cc89aa40c81c24d7de03`. Unpatched copy committed first (`07c4b3f`), the patch is a separate commit. |
-| Other crates | crates.io, `Cargo.lock` (checksums) | wasm-bindgen 0.2.114, alloc-no-stdlib 2.0.4, alloc-stdlib 0.2.2, console_error_panic_hook 0.1.7, cfg-if 1.0.4, once_cell 1.21.4 (+ proc-macro crates, not linked) |
+| `vendor/brotli-decompressor` | crates.io `brotli-decompressor` | **6.3.1**, upstream tag `6.3.1` = commit `26c38e2def3ad84f41a28d182d9ba41779a613c7` (the `sha1` in the archive's `.cargo_vcs_info.json`), crates.io archive sha256 `75c74c9c51b9140663e196b5fb88bc94c334d7a497c8311cb759d8557874747f`. **Unpatched**: the archive's files, except that `Cargo.toml.orig`, `Cargo.lock`, `tests/`, `examples/`, `scripts/`, `rustfmt.toml` and dotfiles are not copied (kept: `Cargo.toml`, `LICENSE`, `README.md`, `.cargo_vcs_info.json`, all of `src/`; `ffi/`, `bin/`, `reader.rs` and the other unused files are in the tree but not compiled into the wasm: no `ffi-api` or `unsafe` feature). Wrapper dependency: `brotli-decompressor = { version = "=6.3.1", path = "vendor/brotli-decompressor" }`. |
+| Other crates | crates.io, `Cargo.lock` (checksums) | wasm-bindgen 0.2.114, alloc-no-stdlib **3.0.0**, alloc-stdlib **0.3.0** (the generation 6.3.1 asks for; 2.0.4 and 0.2.2 before), console_error_panic_hook 0.1.7, cfg-if 1.0.4, once_cell 1.21.4 (+ proc-macro crates, not linked) |
 
-Version note: upstream's `Cargo.lock` at `v2.3.2` pins `brotli-decompressor` **5.0.0** (the npm
-package 2.3.2 contains that version). Upstream's current `master` pins 5.0.3; that was not used,
-because the released npm module 2.3.2 is what the differential tests compare against and what the
-Rust port's patch (vendored 5.0.0) was written for. Moving to a newer brotli-decompressor means
-re-applying `spillgate.patch`, re-running the differential tests and re-checking the numbers.
+Version note: upstream's `Cargo.lock` at `v2.3.2` pins `brotli-decompressor` **5.0.0** (the npm package 2.3.2
+contains that version), and the npm original used as the differential reference still contains 5.0.0. The wrapper
+sources compile unchanged against 6.3.1. The Rust port of spillgate (repository spillgate-rust) vendors the same upstream version.
 
 ## Toolchain and build
 
@@ -55,15 +54,15 @@ re-applying `spillgate.patch`, re-running the differential tests and re-checking
 - Upstream builds with `wasm-pack build -t web`, which runs `wasm-opt` and then minifies the glue
   code with esbuild. **wasm-pack, wasm-opt and esbuild were not used here** (not installed; no tool
   was installed beyond rustc, the wasm32 target and wasm-bindgen-cli). So the module is not
-  size-optimized: 245,459 bytes instead of 208,439 bytes for the npm module; the glue is not
+  size-optimized: 271,636 bytes (245,100 with 5.0.0 plus patches; 6.x is a bigger decoder) instead of 208,439 bytes for the npm module (5.0.0); the glue is not
   minified (18.8 KB). The code is the same, behavior is compared by the differential tests, not by
   bytes. (A check build with `opt-level = 3` was not meaningfully faster on the hostile streams, so
   upstream's "s" was kept.)
 - sha256 of `src/native/brotli_dec_wasm_bg.wasm`:
-  - unpatched build of the vendored sources: `e871a61cd56c9fd3f4e7eaae2dda28f58023c9ce83dfd5f6744b239fb1d1e29a` (commit `07c4b3f`)
-  - patched with `spillgate.patch` + `spillgate-backport.patch` (shipped, built on Linux/WSL Ubuntu 24.04, reproduced by CI on ubuntu-latest): `1e5d9cbe1d51f7729baf2a9248ec0e746162a094134f73bf107bbd2749a958e7`
-  - patched with `spillgate.patch` only (previously shipped, 2026-11-12, up to commit `479c631`): `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`
-  - patched, built on Windows: `4a6f77a8563cf469bbb4db56ca746f54dcec92d665dc1593c0c38f2e73f03afe` (**superseded**, no longer shipped)
+  - **shipped (2026-11-13): unpatched brotli-decompressor 6.3.1, built on Linux/WSL Ubuntu 24.04, rustc 1.98.1, wasm-bindgen 0.2.114: `8b49f416e688a237bf667fb59cfaa5e2d0ad6f172ea87b44bb8f12f35f26b88c`** (271,636 bytes; two builds from different source paths and target directories byte-identical; CI reproduces it on ubuntu-latest)
+  - previously shipped, 5.0.0 with `spillgate.patch` + `spillgate-backport.patch`: `1e5d9cbe1d51f7729baf2a9248ec0e746162a094134f73bf107bbd2749a958e7`
+  - 5.0.0 with `spillgate.patch` only (up to commit `479c631`): `3be7ab7252861c4e8625bbd04ff99b2755201e1ee292e522a85133c3287ef5ad`
+  - 5.0.0 unpatched (commit `07c4b3f`): `e871a61cd56c9fd3f4e7eaae2dda28f58023c9ce83dfd5f6744b239fb1d1e29a`; 5.0.0 patched, built on Windows: `4a6f77a8563cf469bbb4db56ca746f54dcec92d665dc1593c0c38f2e73f03afe` (superseded)
   - for reference, the npm `brotli-dec-wasm` 2.3.2 module: 208,439 bytes (different toolchain and wasm-opt, different bytes expected)
 
 The committed binary is the release artifact. `npm run build` copies `src/native` to `dist/src/native`;
@@ -87,83 +86,80 @@ The job pins rustc 1.98.1 (rustup, wasm32 target) and `wasm-bindgen-cli` `=0.2.1
 It never continues on error. The files of build 1 are uploaded as the artifact
 `brotli-wasm-rebuilt-ubuntu` (kept 14 days) on every run, pass or fail.
 
-**Status:** the committed binary was rebuilt on Linux (WSL Ubuntu 24.04, copy of `packages/br/rust`,
-two paths and target directories, byte-identical, wasm-bindgen glue and typings unchanged) on
-2026-11-12 after the backport and is `1e5d9cbe1d51f7729baf2a9248ec0e746162a094134f73bf107bbd2749a958e7`; `git show HEAD:packages/br/src/native/brotli_dec_wasm_bg.wasm | sha256sum` gives the same. The earlier Windows-built binary
-(`4a6f77a8...`) is superseded; the shipped bytes changed, the behavior did not (br tests and the
-differential tests were re-run). The job compares against this hash. If a rebuild differs on
-purpose (toolchain bump, patch change): download the artifact `brotli-wasm-rebuilt-ubuntu`, copy its
+**Status:** the committed binary was rebuilt on Linux (WSL Ubuntu 24.04, `git archive` of the commit, two source paths and
+two target directories, byte-identical, wasm-bindgen glue and typings identical) on 2026-11-13 after the move to
+brotli-decompressor 6.3.1 and is `8b49f416e688a237bf667fb59cfaa5e2d0ad6f172ea87b44bb8f12f35f26b88c`;
+`git show HEAD:packages/br/src/native/brotli_dec_wasm_bg.wasm | sha256sum` gives the same. The JavaScript glue is byte-identical
+to the 5.0.0 build; only the typings list two exports in another order. If a rebuild differs on
+purpose (toolchain bump, vendor change): download the artifact `brotli-wasm-rebuilt-ubuntu`, copy its
 four files over `packages/br/src/native/`, update `EXPECTED_SHA256` in `ci.yml` and the list above,
 run `npm test`, add a CHANGELOG line, commit.
 
-## Patch 1 (`spillgate.patch`, F3, 2 files, +32 -10 lines, taken from the Rust port's patch of 5.0.0)
+## Patches: none
 
-`HuffmanTreeGroup::init` (huffman/mod.rs) used to free the table memory of the previous meta-block
-and allocate and zero `ntrees * 1080` entries (up to 256 trees: 1.1 MB per tree group) for every
-meta-block. A stream of thousands of tiny meta-blocks that each announce 256 trees therefore made the
-decoder allocate and clear gigabytes per megabyte of input. Now the table memory is kept between
-meta-blocks (reallocated only when a meta-block needs more), a new `retire` replaces `reset` in
-`BrotliStateMetablockBegin`/`CleanupAfterMetablock` (state.rs), and `BrotliStateCleanup` releases it
-when the stream state ends. Stale entries are never read: every tree is built before it is used.
-Output is bit-identical (differential tests below).
+The vendored brotli-decompressor 6.3.1 is **unpatched**; `build.sh` applies nothing. The fork of 5.0.0 carried two
+patches (history: commit `07c4b3f` unpatched 5.0.0, the F3 patch, `ba36955` the backport; both patch files were
+removed in the rebase to 6.3.1, commit `ffe59d7`):
 
-Tried and dropped: reusing the two context-map buffers (16 KiB literal, 1 KiB distance at 256 block
-types) between meta-blocks. A hostile shape for it (`hostileBlockTypes`) costs 130 ns per input byte
-before and after the change, i.e. less than the tree shape; the allocation is not where the time
-goes, so the change was not kept (smaller patch to review).
+- **The F3 patch (hostile meta-block CPU) is not needed.** On 5.0.0, `HuffmanTreeGroup::init` freed and re-allocated
+  (and zeroed) `ntrees * 1080` table entries per meta-block, up to 1.1 MB per tree group, so thousands of tiny meta-blocks
+  that each announce 256 trees cost 530-565 ns per input byte. 6.x grows the tables on demand and keeps buffers that are
+  large enough in `init`. Measured on the unpatched 6.3.1 build (table below): 108-122 ns per input byte for the same
+  streams, 4.6 to 5 times faster than the 5.0.0 original and faster than the patched 5.0.0 fork (231-242 ns). What is
+  left is the work of reading the trees: linear in the input, no amplification. The Rust port found the same and tried
+  removing `reset()` from the meta-block cleanup on 6.3.1 (no gain, dropped).
+- **The strictness backports are in 6.x as they are:** upstream `8ed0d7d` (nonzero padding after the last meta-block is
+  PADDING_2) and `693a4a1` (a non-last meta-block must not exceed MLEN: BLOCK_LENGTH_2). Upstream `677eef1` additionally splits
+  PADDING_1 (-14: nonzero padding before a stored or metadata block, in an empty last block) from PADDING_2 (-15), as libbrotli does.
 
-## Patch 2 (`spillgate-backport.patch`, 1 file, +9 lines: two upstream fixes, applied in `vendor/`)
+If the F3 test ever fails after a future vendor bump, retaining the tree memory between meta-blocks (not calling
+`reset()` in `BrotliStateCleanupAfterMetablock`, releasing it in `BrotliStateCleanup`) is the first thing to try.
 
-Kept apart from `spillgate.patch` on purpose: that one is our own change (F3, performance, output
-bit-identical); this one is upstream code, backported unchanged in effect from brotli-decompressor
-6.x, so it can be dropped when the vendored crate moves to a release that contains it. Both are
-already applied in the committed `vendor/` tree; the files document them (`git diff` against the
-unpatched crate, commit `07c4b3f`, shows both). `build.sh` applies nothing.
+## Measured (Node 24, the author's machine, 2026-11-13, best of five, no wasm-opt)
 
-- upstream `8ed0d7d` (nonzero padding after the last meta-block): `BROTLI_STATE_METABLOCK_DONE` set
-  `PADDING_2` but fell through to `BROTLI_STATE_DONE`, which overwrote the result with success.
-  Now `break`s (error code -15, as upstream).
-- upstream `693a4a1` (non-last meta-block must not exceed MLEN): check `meta_block_remaining_len < 0` at
-  the start of `METABLOCK_DONE`, before cleanup; error `FORMAT_BLOCK_LENGTH_2` (-10), as upstream.
+| Stream | Original 2.3.2 (5.0.0, unpatched) | Fork before (5.0.0 + patches, 2026-11-12) | Fork now (6.3.1 unpatched) | libbrotli (Node) |
+|---|---|---|---|---|
+| 4000 meta-blocks x 256 literal trees (1.58 MB) | 872 ms, 553 ns/B | 381 ms, 242 ns/B | 170 ms, 108 ns/B | 121 ms, 77 ns/B |
+| same + 256 distance trees (2.86 MB) | 1621 ms, 566 ns/B | 660 ms, 231 ns/B | 350 ms, 122 ns/B | 228 ms, 80 ns/B |
+| 4000 x (256 literal + 256 distance trees, 4 symbols each) (6.1 MB) | 1726 ms, 285 ns/B | 796 ms, 131 ns/B | 323 ms, 53 ns/B | 1138 ms, 188 ns/B |
+| 1000 x 256 complete 8-bit trees + 256 distance trees (9.5 MB) | 1219 ms, 129 ns/B | 888 ms, 94 ns/B | 626 ms, 66 ns/B | 575 ms, 61 ns/B |
+| 4000 meta-blocks with 256 literal block types (0.31 MB) | 64 ms, 209 ns/B | 41 ms, 130 ns/B | 35 ms, 115 ns/B | 9 ms, 30 ns/B |
 
-Effect: 1,264 of the damaged streams of the differential tests (valid streams with bit flips etc.)
-that the npm original accepts or refuses with another code are now refused with -9/-10/-15; the
-leniency count against libbrotli dropped from 224 to 27. `native_diff.test.ts` allows exactly this
-difference to the original (the original accepts and the fork refuses with -9/-10/-15, or both refuse
-and the fork names one of these codes at the same input and output position) and, in both cases,
-requires libbrotli to refuse the stream with BLOCK_LENGTH_1/2 or PADDING_1/2. Everything else must be
-identical. `upstream_fixes.test.ts` has the strict tests (`corrupt` for every read size and
-chunking; the 6 overshoot shapes and both paddings), no longer skipped.
+(The "before" column is from the earlier notes, taken in another session; the original's numbers vary 5 to 20 percent
+between runs.) Module memory after these streams: 3-11 MiB (original 4-13 MiB). The 5 GiB zero stream (window 24, 4,053
+input bytes, input step 4096, output step 65536) decodes exactly in 7 s with a module memory of at most 17.4 MiB (16 MiB
+window plus 1.4 MiB).
 
-## Measured (Node 24, the author's machine, 2026-11-12, best of three, no wasm-opt)
-
-| Stream | Original 2.3.2 (self-built, unpatched) | Fork |
-|---|---|---|
-| 4000 meta-blocks x 256 literal trees (1.58 MB) | 838 ms, 531 ns/B | 381 ms, 242 ns/B |
-| same + 256 distance trees (2.86 MB) | 1590 ms, 555 ns/B | 660 ms, 231 ns/B |
-| 4000 x (256 literal + 256 distance trees, 4 symbols each) (6.1 MB) | 1708 ms, 282 ns/B | 796 ms, 131 ns/B |
-| 1000 x 256 complete 8-bit trees + 256 distance trees (9.5 MB) | 1009 ms, 106 ns/B | 888 ms, 94 ns/B |
-| 4000 meta-blocks with 256 literal block types (0.31 MB) | - | 41 ms, 130 ns/B |
-
-What remains is the cost of reading the trees (about 290 ns per tree in the decoder itself,
-390 bytes of input per 256 one-symbol trees): linear in the input, no amplification beyond a
-constant. The Rust port measured 0.28 s for 4000 blocks (native), the Java port 0.09 s.
+The F3 test in `br.test.ts` keeps: absolute bound 300 ns per input byte (about 2.5 times the measurement; the original,
+at 565, fails it), relative bound at least 3 times faster than the original in the same process (best of 5, alternating;
+measured 4.6), linearity (a quarter of the stream costs about a quarter), `maxInput` stops it. The relative bound used to
+be 1.5 (original 2.4 times slower than the patched fork); the original is still the slow side, so the check stays meaningful.
 
 ## Tests
 
-`tests/native_diff.test.ts`: the fork, the npm original and Node's libbrotli, 22,164 comparisons
-(all verdicts: 7,146 success, 10,624 error, 4,394 truncated): valid streams (qualities 0-11, windows
-10-24, three modes, nine payload kinds, 1-byte input and small output steps), hand-built streams, many
-meta-blocks per stream, every truncation, every bit flip of small streams, byte edits, trailing
-bytes, 4,300 random inputs. Fork and original must agree on verdict, output hash, consumed input
-and error text; wherever the fork accepts a stream libbrotli must give the same bytes, and a stream
-libbrotli accepts may not be refused. The same tests passed for the **unpatched** build of these
-sources against the original (same 22,164 comparisons), then for the patched build.
-Known difference, not changed: the Rust decoder (original and fork) accepts 224 of the damaged
-streams that libbrotli refuses (padding bits and similar leniency).
+`tests/native_diff.test.ts`: the fork, the npm original and Node's libbrotli, 22,409 comparisons
+(20,411 identical to the original: 6,921 success, 8,419 error, 5,071 truncated; 1,998 with an allowed difference below):
+valid streams (qualities 0-11, windows 10-24, three modes, nine payload kinds, 1-byte input and small output steps),
+hand-built streams, many meta-blocks per stream, every truncation, every bit flip of small streams, byte edits, trailing
+bytes, 4,300 random inputs. Fork and original must agree on verdict, output hash, consumed input and error text, with
+exactly these allowed differences (all on damaged or random streams, none on a valid one), each of them confirmed by
+libbrotli's own error code:
+
+| Original (5.0.0) | Fork (6.3.1) | Count | libbrotli |
+|---|---|---|---|
+| accepts | refuses, -10 (MLEN overshoot) | 8 | BLOCK_LENGTH_2 |
+| accepts | refuses, -15 (nonzero padding after the last meta-block) | 58 | PADDING_2 |
+| refuses, -9 | refuses, -10, same input/output position | 1,196 | BLOCK_LENGTH_2 |
+| refuses, -7 or -6 | refuses, -10, same position | 1 + 1 | BLOCK_LENGTH_2 (6.x checks the MLEN overshoot before the table checks) |
+| refuses, -15 | refuses, -14 (PADDING_1), same position | 705 + 29 | PADDING_1 (705); WINDOW_BITS (29: random bodies behind a large-window header, which libbrotli refuses before it gets to the padding) |
+
+In every case the fork's code is the one libbrotli names, never the reverse. Wherever the fork accepts a stream libbrotli
+gives the same bytes, and a stream libbrotli accepts is never refused. Known difference, not changed: the Rust decoder (original
+and fork) accepts 27 of the random streams that libbrotli refuses (all behind a large-window header).
+(224 before the 5.0.0 backport, 27 after it, 27 now.) Everything else (about 20,400 comparisons) is identical.
 `SG_BR_NATIVE=<file URL>` runs the tests against another build.
 
-## Upstream fixes 5.0.1 .. 6.3.1 (step 1 of the rebase: probed, nothing changed)
+## Upstream fixes 5.0.1 .. 6.3.1 (probed against 5.0.0 first; 6.3.1 contains all of them)
 
 `tests/upstream_fixes.test.ts` (+ `tests/upstream_streams.ts`, hand-built streams with one-symbol prefix
 codes) probes each robustness fix of brotli-decompressor after 5.0.0 against the shipped decoder
@@ -190,9 +186,9 @@ replace the code the F3 patch changes: step 2 has to re-apply and re-measure it.
 
 **Two real bugs of 5.0.0, both strictness (parser differential, no memory or CPU effect):**
 693a4a1 and 8ed0d7d. The libbrotli, andybalholm/brotli and 6.3.1 decoders rejected what 5.0.0
-delivers. Severity low to medium. **Fixed 2026-11-12** by `spillgate-backport.patch` (see "Patch 2");
+delivers. Severity low to medium. Fixed 2026-11-12 by a backport patch, since 2026-11-13 by 6.3.1 itself (see "Patches: none");
 the strict tests (`corrupt` expected) run unconditionally and pass. The "Observed" column above
-describes the unpatched 5.0.0.
+describes 5.0.0 (the npm original still behaves so).
 
 **What a trap costs, and what is done about it (hardening, 2026-11-12):** none is reachable (measured
 with an artificial one: output step 4 GiB - 1, a `capacity overflow` panic). The panic aborts without
@@ -212,13 +208,15 @@ instead). `tests/trap.test.ts` simulates traps (test hook `_test.outputStep`): 5
 decoder open across them, then normal decoding, no uncaught exception; without the replacement it fails
 (checked).
 
-**Checked incidentally:** output beyond 4 GiB is exact with 5.0.0 (5 GiB of zeros, `SG_BR_LONG=1`):
-the 32-bit `usize` counters wrap consistently. 6.0.0 (b1d31a8) used checked `usize` arithmetic there,
-which (from the diff, not run) refuses such streams on wasm32; 6.3.1 uses `u64`. Keep that test for the rebase.
+**Output beyond 4 GiB (checked on 6.3.1, 2026-11-13):** 5 GiB + 12,345 bytes of zeros (`SG_BR_LONG=1`, window 24)
+decode exactly, block by block identical to zeros, module memory at most 17.4 MiB. 6.0.0 (b1d31a8) introduced checked
+`usize` arithmetic, which would refuse such streams on wasm32 (32-bit `usize`); 6.3.1 keeps the position counters
+(`partial_pos_out` and friends) in `u64`, and the test confirms it. Keep this test for every vendor bump.
 
 ## Maintenance
 
 - Advisories for `brotli-decompressor`, `brotli-dec-wasm` and wasm-bindgen are **not** tracked by
   `npm audit` any more (the code is compiled in). Watch the RustSec database and the upstream
-  repositories manually; on a fix, update `vendor/` and re-apply `spillgate.patch`.
+  repositories manually; on a fix, update `vendor/` (to the next upstream release, unpatched), rebuild on Linux, update
+  `EXPECTED_SHA256`, re-run the tests including `SG_BR_LONG=1`.
 - `cargo audit` was not run (not installed).
