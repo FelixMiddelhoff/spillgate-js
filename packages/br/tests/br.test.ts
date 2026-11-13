@@ -18,18 +18,14 @@ await initBrotli();
 // The original decoder, the reference of the relative timing test: decode a whole stream once.
 const requireHere = createRequire(import.meta.url);
 originalWasm.initSync({ module: readFileSync(requireHere.resolve("brotli-dec-wasm/web/bg.wasm")) });
-async function bestOriginal(stream: Uint8Array): Promise<number> {
-  let fastest = Infinity;
-  for (let i = 0; i < 3; i++) {
-    const started = performance.now();
-    const decoder = new originalWasm.DecompressStream();
-    const result = decoder.decompress(stream, 65536);
-    assert.equal(result.code, originalWasm.BrotliStreamResultCode.ResultSuccess);
-    result.free();
-    decoder.free();
-    fastest = Math.min(fastest, performance.now() - started);
-  }
-  return fastest;
+async function originalOnce(stream: Uint8Array): Promise<number> {
+  const started = performance.now();
+  const decoder = new originalWasm.DecompressStream();
+  const result = decoder.decompress(stream, 65536);
+  assert.equal(result.code, originalWasm.BrotliStreamResultCode.ResultSuccess);
+  result.free();
+  decoder.free();
+  return performance.now() - started;
 }
 
 const LOOSE: Limits = { maxOutput: 2 ** 30, disableRatioLimit: true };
@@ -263,22 +259,28 @@ test("Covers: SG-R-CDC-04 SG-R-LAY-02 - CPU of many tiny hostile meta-blocks wit
   const stream = hostileBrotli(4000, "single", true);
   assert.deepEqual(Buffer.from(zlib.brotliDecompressSync(stream)), Buffer.alloc(4000, 0x41), "the stream is valid");
   const limits: Limits = { maxOutput: 1 << 20, disableRatioLimit: true };
-  const best = async (): Promise<number> => {
-    let fastest = Infinity;
-    for (let i = 0; i < 3; i++) {
-      const started = performance.now();
-      const [kind, out] = await run(stream, "br", limits);
-      fastest = Math.min(fastest, performance.now() - started);
-      assert.deepEqual([kind, out.length], ["ok", 4000]);
-    }
-    return fastest;
+  // Fork and original are timed alternately (5 rounds after one warm-up round of each) and the
+  // best of each side is compared, so a noisy shared runner slows both sides alike and a single
+  // slow run cannot decide. Costs about 5 x (0.7 s + 1.6 s) + warm-up = about 14 s on the author's machine.
+  const once = async (): Promise<number> => {
+    const started = performance.now();
+    const [kind, out] = await run(stream, "br", limits);
+    const elapsed = performance.now() - started;
+    assert.deepEqual([kind, out.length], ["ok", 4000]);
+    return elapsed;
   };
-  const ms = await best();
+  await once();
+  await originalOnce(stream);
+  let ms = Infinity;
+  let originalMs = Infinity;
+  for (let i = 0; i < 5; i++) {
+    ms = Math.min(ms, await once());
+    originalMs = Math.min(originalMs, await originalOnce(stream));
+  }
   const nsPerByte = (ms * 1e6) / stream.length;
   // absolute: 2.5 times the measurement (the unpatched build measures 555 ns per byte here)
   assert.ok(nsPerByte < 600, `${ms.toFixed(0)} ms for ${stream.length} input bytes (${nsPerByte.toFixed(0)} ns per byte)`);
   // relative to the original decoder in the same process: at least 1.5 times faster (measured 2.4)
-  const originalMs = await bestOriginal(stream);
   assert.ok(ms * 1.5 < originalMs, `fork ${ms.toFixed(0)} ms, original ${originalMs.toFixed(0)} ms`);
   // linear: a quarter of the stream costs about a quarter (generous factor 2 for noise and warm-up)
   const quarter = hostileBrotli(1000, "single", true);
