@@ -6,3 +6,7 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule: { interval: weekly }
+    ignore:
+      # @types/node follows the minimum supported Node (engines.node >= 22), not the latest major
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]

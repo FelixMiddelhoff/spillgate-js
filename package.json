@@ -16,7 +16,7 @@
     "spectrace": "npm run spectrace -w spillgate"
   },
   "devDependencies": {
-    "@types/node": "^24",
+    "@types/node": "^22",
     "typescript": "^5.9"
   }
 }
