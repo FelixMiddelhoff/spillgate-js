@@ -2,7 +2,9 @@
 
 Versions below 1.0 may still change the API.
 
-## Unreleased
+## 0.1.5 - 2026-11-13
+
+All three packages (`spillgate`, `spillgate-br`, `spillgate-zstd`).
 
 - `spillgate-br`: **the WebAssembly decoder is now the unpatched upstream brotli-decompressor 6.3.1** (was 5.0.0 with two patches; wrapper still brotli-dec-wasm 2.3.2, rustc 1.98.1, wasm-bindgen 0.2.114, alloc-no-stdlib 3.0.0, alloc-stdlib 0.3.0). Both patch files (`spillgate.patch`, `spillgate-backport.patch`) are removed; `vendor/` is the crates.io archive (upstream tag 26c38e2). New WebAssembly sha256 `8b49f416e688a237bf667fb59cfaa5e2d0ad6f172ea87b44bb8f12f35f26b88c` (271,636 bytes, was 245,100; CI updated, rebuilt twice on Linux from different paths, identical). Details in `rust/NOTES.md`.
 - `spillgate-br`, F3 (CPU of hostile meta-blocks): **no patch is needed on 6.x.** 6.x grows the prefix-code tables on demand instead of allocating and clearing them per meta-block. Same streams, best of five: 4000 meta-blocks with 256 literal and 256 distance codes (2.86 MB in) 350 ms, 122 ns per input byte (5.0.0 original 1,621 ms, 566 ns; 5.0.0 with our patch 660 ms, 231 ns); literal-only shape 170 ms (original 872 ms, patched 381 ms); 4-symbol shape 323 ms (1,726 / 796 ms); 8-bit complete trees 626 ms (1,219 / 888 ms). Linear in the input, output bit-identical. The regression test now requires at least 3 times faster than the original decoder in the same process (was 1.5) and below 300 ns per input byte (was 600).

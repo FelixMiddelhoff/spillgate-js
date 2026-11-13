@@ -1,6 +1,6 @@
 {
   "name": "spillgate-br",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Brotli for spillgate: bounded steps, window cap, large-window refusal, exact input accounting.",
   "keywords": [
     "brotli",
@@ -41,7 +41,7 @@
     "build:wasm": "bash rust/build.sh"
   },
   "peerDependencies": {
-    "spillgate": "0.1.4"
+    "spillgate": "0.1.5"
   },
   "devDependencies": {
     "brotli-dec-wasm": "2.3.2",
