@@ -1,7 +1,12 @@
 #![allow(unused_imports)]
+// Assert at compile time that the default build contains no unsafe code:
+// the only unsafe in this binary lives behind the "unsafe" and "seccomp"
+// features, plus the ffi-api test module.
+#![cfg_attr(not(any(feature="unsafe", feature="seccomp", all(test, feature="ffi-api"))), forbid(unsafe_code))]
 
 mod integration_tests;
 mod error_handling_tests;
+mod ffi_stream_tests;
 mod tests;
 extern crate brotli_decompressor;
 extern crate core;
@@ -213,33 +218,54 @@ declare_stack_allocator_struct!(CallocAllocatedFreelist, 8192, calloc);
 
 #[cfg(feature="seccomp")]
 pub fn decompress<InputType, OutputType>(r: &mut InputType,
-                                         mut w: &mut OutputType,
-                                         buffer_size: usize)
+                                         w: &mut OutputType,
+                                         buffer_size: usize,
+                                         dict: Vec<u8>)
                                          -> Result<(), io::Error>
   where InputType: Read,
         OutputType: Write
 {
 
-  let mut u8_buffer = unsafe {define_allocator_memory_pool!(4, u8, [0; 1024 * 1024 * 200], calloc)};
+  // The u8 pool holds the ring buffer, which grows on demand up to the window
+  // size. This pool never merges the blocks that growth frees, so reaching a
+  // window can take twice the window from it. The extra 129 MiB covers the
+  // ring buffers left behind on the way to the largest window that fitted
+  // before growth on demand, 128 MiB (lgwin 27): each power of two from 1 KiB
+  // to 64 MiB, plus 566 bytes of slack each, is 128 MiB + 8,598 bytes.
+  let mut u8_buffer = unsafe {define_allocator_memory_pool!(4, u8, [0; 1024 * 1024 * (200 + 129)], calloc)};
   let mut u32_buffer = unsafe {define_allocator_memory_pool!(4, u32, [0; 16384], calloc)};
   let mut hc_buffer = unsafe {define_allocator_memory_pool!(4, HuffmanCode, [0; 1024 * 1024 * 16], calloc)};
   let mut alloc_u8 = CallocAllocatedFreelist::<u8>::new_allocator(u8_buffer.data, bzero);
   let alloc_u32 = CallocAllocatedFreelist::<u32>::new_allocator(u32_buffer.data, bzero);
   let alloc_hc = CallocAllocatedFreelist::<HuffmanCode>::new_allocator(hc_buffer.data, bzero);
+  // Allocate the dictionary cell first, while the pool is one contiguous slice,
+  // so the stack allocator splits it to exactly dict.len(): the custom dictionary
+  // length is taken from the cell's slice length, so any trailing slack would
+  // corrupt the dictionary.
+  let mut custom_dict = alloc_u8.alloc_cell(dict.len());
+  custom_dict.slice_mut().clone_from_slice(&dict[..]);
+  let mut input_buffer = alloc_u8.alloc_cell(buffer_size);
+  let mut output_buffer = alloc_u8.alloc_cell(buffer_size);
   let ret = unsafe{prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT)};
   if ret != 0 {
      panic!("Unable to activate seccomp");
   }
-  match brotli_decompressor::BrotliDecompressCustomIo(&mut IoReaderWrapper::<InputType>(r),
-                                          &mut IoWriterWrapper::<OutputType>(w),
-                                          &mut alloc_u8.alloc_cell(buffer_size).slice_mut(),
-                                          &mut alloc_u8.alloc_cell(buffer_size).slice_mut(),
+  // Reborrow w so it survives the call: the success path exits via a raw
+  // syscall(60) that bypasses the writer flush a normal main() return would do,
+  // so we must flush the output buffer ourselves before exiting.
+  let result = brotli_decompressor::BrotliDecompressCustomIoCustomDict(&mut IoReaderWrapper::<InputType>(r),
+                                          &mut IoWriterWrapper::<OutputType>(&mut *w),
+                                          input_buffer.slice_mut(),
+                                          output_buffer.slice_mut(),
                                           alloc_u8,
                                           alloc_u32,
                                           alloc_hc,
-                                          Error::new(ErrorKind::UnexpectedEof, "Unexpected EOF")) {
+                                          custom_dict,
+                                          Error::new(ErrorKind::UnexpectedEof, "Unexpected EOF"));
+  match result {
       Err(e) => Err(e),
       Ok(()) => {
+        w.flush()?;
         unsafe{syscall(60);};
         unreachable!()
       },
@@ -302,8 +328,47 @@ fn writeln_time<OutputType: Write>(strm: &mut OutputType,
   writeln!(strm, "{:} {:} {:}.{:09}", v0, data, v1, v2)
 }
 
+// Decompresses with a serialized shared dictionary (and optionally a raw
+// LZ77 prefix dictionary) attached.
+#[cfg(not(feature="seccomp"))]
+pub fn decompress_serialized_dict<InputType, OutputType>(r: &mut InputType,
+                                                         w: &mut OutputType,
+                                                         buffer_size: usize,
+                                                         dict: Vec<u8>,
+                                                         serialized_dict: Vec<u8>)
+                                                         -> Result<(), io::Error>
+  where InputType: Read,
+        OutputType: Write
+{
+  let mut alloc_u8 = HeapAllocator::<u8> { default_value: 0 };
+  let mut raw_dict_alloc = alloc_u8.alloc_cell(dict.len());
+  raw_dict_alloc.slice_mut().clone_from_slice(&dict[..]);
+  let mut serialized_alloc = alloc_u8.alloc_cell(serialized_dict.len());
+  serialized_alloc.slice_mut().clone_from_slice(&serialized_dict[..]);
+  let mut reader = brotli_decompressor::DecompressorCustomIo::new_with_custom_dictionary(
+    IoReaderWrapper::<InputType>(r),
+    alloc_u8.alloc_cell(buffer_size),
+    alloc_u8,
+    HeapAllocator::<u32> { default_value: 0 },
+    HeapAllocator::<HuffmanCode> { default_value: HuffmanCode::default() },
+    raw_dict_alloc,
+    Error::new(ErrorKind::InvalidData, "Invalid Data"));
+  if !reader.attach_serialized_dictionary(serialized_alloc) {
+    return Err(Error::new(ErrorKind::InvalidData, "Invalid serialized dictionary"));
+  }
+  let mut buf = vec![0u8; buffer_size];
+  loop {
+    match brotli_decompressor::CustomRead::read(&mut reader, &mut buf[..]) {
+      Err(e) => return Err(e),
+      Ok(0) => return Ok(()),
+      Ok(size) => w.write_all(&buf[..size])?,
+    }
+  }
+}
+
 fn main() {
   let mut dictionary = Vec::<u8>::new();
+  let mut serialized_dictionary: Option<Vec<u8>> = None;
   let mut double_dash = false;
   let mut input: Option<File> = None;
   let mut output: Option<File> = None;
@@ -320,6 +385,16 @@ fn main() {
       }
       continue;
     }
+    if argument.starts_with("-serialized_dict=") && !double_dash {
+      if serialized_dictionary.is_some() {
+        panic!("Only one serialized dictionary may be attached");
+      }
+      let mut dict_file = File::open(&Path::new(&argument[17..])).unwrap();
+      let mut serialized = Vec::<u8>::new();
+      dict_file.read_to_end(&mut serialized).unwrap();
+      serialized_dictionary = Some(serialized);
+      continue;
+    }
     if input.is_none() {
        input = Some(File::open(&Path::new(&argument)).unwrap());
     } else if output.is_none() {
@@ -328,13 +403,26 @@ fn main() {
        panic!("Cannot specify more than 2 filename args (input, output)")
     }
   }
-  if input.is_none() {
-    decompress(&mut io::stdin(), &mut io::stdout(), 65536, dictionary).unwrap();
-  } else {
-    if output.is_none() {
-      decompress(&mut input.unwrap(), &mut io::stdout(), 65536, dictionary).unwrap();
-    } else {
-      decompress(&mut input.unwrap(), &mut output.unwrap(), 65536, dictionary).unwrap();
+  #[cfg(not(feature="seccomp"))]
+  {
+    if let Some(serialized_dictionary) = serialized_dictionary {
+      match (input, output) {
+        (None, _) => decompress_serialized_dict(&mut io::stdin(), &mut io::stdout(), 65536, dictionary, serialized_dictionary).unwrap(),
+        (Some(mut i), None) => decompress_serialized_dict(&mut i, &mut io::stdout(), 65536, dictionary, serialized_dictionary).unwrap(),
+        (Some(mut i), Some(mut o)) => decompress_serialized_dict(&mut i, &mut o, 65536, dictionary, serialized_dictionary).unwrap(),
+      }
+      return;
     }
+  }
+  #[cfg(feature="seccomp")]
+  {
+    if serialized_dictionary.is_some() {
+      panic!("serialized dictionaries unsupported with seccomp");
+    }
+  }
+  match (input, output) {
+    (None, _) => decompress(&mut io::stdin(), &mut io::stdout(), 65536, dictionary).unwrap(),
+    (Some(mut i), None) => decompress(&mut i, &mut io::stdout(), 65536, dictionary).unwrap(),
+    (Some(mut i), Some(mut o)) => decompress(&mut i, &mut o, 65536, dictionary).unwrap(),
   }
 }

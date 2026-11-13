@@ -7,6 +7,9 @@
 #![allow(non_upper_case_globals)]
 #![cfg_attr(feature="no-stdlib-ffi-binding",cfg_attr(not(feature="std"), feature(lang_items)))]
 #![cfg_attr(feature="no-stdlib-ffi-binding",cfg_attr(not(feature="std"), feature(panic_handler)))]
+// Assert at compile time that the default build contains no unsafe code:
+// the only unsafe in this crate lives behind the "unsafe" and "ffi-api" features.
+#![cfg_attr(not(any(feature="unsafe", feature="ffi-api")), forbid(unsafe_code))]
 
 
 #[macro_use]
@@ -36,14 +39,19 @@ mod huffman;
 mod state;
 mod prefix;
 mod context;
+mod shared_dictionary;
 pub mod transform;
 mod test;
+mod test_metadata;
 mod decode;
 pub mod io_wrappers;
 pub mod reader;
 pub mod writer;
 pub use huffman::{HuffmanCode, HuffmanTreeGroup};
 pub use state::BrotliState;
+pub use state::BrotliDecoderErrorCode;
+pub use state::BrotliDecoderParameter;
+pub use shared_dictionary::BrotliSharedDictionary;
 #[cfg(feature="ffi-api")]
 pub mod ffi;
 pub use reader::{DecompressorCustomIo};
@@ -70,7 +78,7 @@ pub use io_wrappers::{IntoIoReader, IoReaderWrapper, IntoIoWriter, IoWriterWrapp
 //                               mut total_out: &mut usize,
 //                               mut s: &mut BrotliState<AllocU8, AllocU32, AllocHC>);
 
-pub use decode::{BrotliDecompressStream, BrotliResult, BrotliDecoderHasMoreOutput, BrotliDecoderIsFinished, BrotliDecoderTakeOutput};
+pub use decode::{BrotliDecompressStream, BrotliDecompressStreamWithDictionary, BrotliResult, BrotliDecoderHasMoreOutput, BrotliDecoderIsFinished, BrotliDecoderTakeOutput};
 
 
 
@@ -334,8 +342,8 @@ pub fn copy_from_to<R: io::Read, W: io::Write>(mut r: R, mut w: W) -> io::Result
 pub struct BrotliDecoderReturnInfo {
     pub decoded_size: usize,
     pub error_string: [u8;256],
-    pub error_code: state::BrotliDecoderErrorCode,
     pub result: BrotliResult,
+    pub error_code: state::BrotliDecoderErrorCode,
 }
 impl BrotliDecoderReturnInfo {
     fn new<AllocU8: Allocator<u8>,
@@ -375,6 +383,7 @@ pub fn brotli_decode_prealloc(
   scratch_u32: &mut [u32],
   scratch_hc: &mut [HuffmanCode],
 ) -> BrotliDecoderReturnInfo {
+  let u8_pool_size = scratch_u8.len();
   let stack_u8_allocator = MemPool::<u8>::new_allocator(scratch_u8, bzero);
   let stack_u32_allocator = MemPool::<u32>::new_allocator(scratch_u32, bzero);
   let stack_hc_allocator = MemPool::<HuffmanCode>::new_allocator(scratch_hc, bzero);
@@ -385,6 +394,8 @@ pub fn brotli_decode_prealloc(
   let mut written: usize = 0;
   let mut brotli_state =
     BrotliState::new(stack_u8_allocator, stack_u32_allocator, stack_hc_allocator);
+  // MemPool never merges freed blocks, which the ring buffer sizing must know.
+  brotli_state.u8_pool_size = u8_pool_size;
   let result = ::BrotliDecompressStream(&mut available_in,
                                       &mut input_offset,
                                       &input[..],
@@ -403,7 +414,7 @@ pub fn brotli_decode(
     output_and_scratch: &mut[u8],
 ) -> BrotliDecoderReturnInfo {
   let mut stack_u32_buffer = [0u32; 12 * 1024 * 6];
-  let mut stack_hc_buffer = [HuffmanCode::default(); 128 * (decode::kNumInsertAndCopyCodes as usize + decode::kNumLiteralCodes as usize) + 6 * decode::kNumBlockLengthCodes as usize * huffman::BROTLI_HUFFMAN_MAX_TABLE_SIZE as usize];
+  let mut stack_hc_buffer = [HuffmanCode::default(); 128 * (decode::kNumInsertAndCopyCodes as usize + decode::kNumLiteralCodes as usize) + 6 * decode::kNumBlockLengthCodes as usize * huffman::INSERT_COPY_TABLE_WINDOW];
   let mut guessed_output_size = core::cmp::min(
     core::cmp::max(input.len(), // shouldn't shrink too much
                    output_and_scratch.len() / 3),
@@ -418,6 +429,7 @@ pub fn brotli_decode(
       }
   }
   let (mut output, mut scratch_space) = output_and_scratch.split_at_mut(guessed_output_size);
+  let u8_pool_size = scratch_space.len();
   let stack_u8_allocator = MemPool::<u8>::new_allocator(&mut scratch_space, bzero);
   let stack_u32_allocator = MemPool::<u32>::new_allocator(&mut stack_u32_buffer, bzero);
   let stack_hc_allocator = MemPool::<HuffmanCode>::new_allocator(&mut stack_hc_buffer, bzero);
@@ -428,6 +440,8 @@ pub fn brotli_decode(
   let mut written: usize = 0;
   let mut brotli_state =
     BrotliState::new(stack_u8_allocator, stack_u32_allocator, stack_hc_allocator);
+  // MemPool never merges freed blocks, which the ring buffer sizing must know.
+  brotli_state.u8_pool_size = u8_pool_size;
   let result = ::BrotliDecompressStream(&mut available_in,
                                       &mut input_offset,
                                       &input[..],
@@ -443,15 +457,35 @@ pub fn brotli_decode(
 #[cfg(feature="std")]
 pub fn brotli_decode(
     input: &[u8],
+    output: &mut[u8],
+) -> BrotliDecoderReturnInfo {
+  brotli_decode_with_allocators(input, output,
+                                StandardAlloc::default(),
+                                StandardAlloc::default(),
+                                StandardAlloc::default())
+}
+
+#[cfg(feature="std")]
+pub(crate) fn brotli_decode_with_allocators<AllocU8: Allocator<u8>,
+                                            AllocU32: Allocator<u32>,
+                                            AllocHC: Allocator<HuffmanCode>>(
+    input: &[u8],
     mut output: &mut[u8],
+    alloc_u8: AllocU8,
+    alloc_u32: AllocU32,
+    alloc_hc: AllocHC,
 ) -> BrotliDecoderReturnInfo {
   let mut available_out = output.len();
   let mut available_in: usize = input.len();
   let mut input_offset: usize = 0;
   let mut output_offset: usize = 0;
   let mut written: usize = 0;
-  let mut brotli_state =
-    BrotliState::new(StandardAlloc::default(), StandardAlloc::default(), StandardAlloc::default());
+  let mut brotli_state = BrotliState::new(alloc_u8, alloc_u32, alloc_hc);
+  // The output buffer bounds a successful decode, but may be much larger than
+  // the stream. Use it as a staged ring-buffer growth hint instead of sizing
+  // the first ring buffer from the full output capacity.
+  brotli_state.one_shot_output_size =
+    core::cmp::min(available_out, u32::MAX as usize) as u32;
   let result = ::BrotliDecompressStream(&mut available_in,
                                       &mut input_offset,
                                       &input[..],

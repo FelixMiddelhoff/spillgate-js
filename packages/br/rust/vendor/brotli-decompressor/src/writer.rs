@@ -7,6 +7,7 @@ pub use alloc_stdlib::StandardAlloc;
 pub use alloc_stdlib::HeapAlloc;
 pub use huffman::{HuffmanCode, HuffmanTreeGroup};
 pub use state::BrotliState;
+use state::BrotliDecoderParameter;
 // use io_wrappers::write_all;
 pub use io_wrappers::{CustomWrite};
 #[cfg(feature="std")]
@@ -51,6 +52,19 @@ impl<W: Write,
                                                                   dict,
                                                                   Error::new(ErrorKind::InvalidData,
                                                                              "Invalid Data")))
+    }
+
+    pub fn attach_dictionary(&mut self, dict: AllocU8::AllocatedMemory) -> bool {
+      self.0.attach_dictionary(dict)
+    }
+    pub fn attach_serialized_dictionary(&mut self, dict: AllocU8::AllocatedMemory) -> bool {
+      self.0.attach_serialized_dictionary(dict)
+    }
+    pub fn set_parameter(&mut self, param: BrotliDecoderParameter, value: u32) -> bool {
+      self.0.set_parameter(param, value)
+    }
+    pub fn set_initial_ring_buffer_size(&mut self, size: u32) -> bool {
+      self.0.set_initial_ring_buffer_size(size)
     }
 
     pub fn get_ref(&self) -> &W {
@@ -130,6 +144,32 @@ impl<W: Write> DecompressorWriter<W> {
                                                                               dict))
   }
 
+  // Attaches an additional raw LZ77 prefix dictionary; only allowed before
+  // the first write. Returns false if the dictionary could not be attached.
+  pub fn attach_dictionary(&mut self, dict: <StandardAlloc as Allocator<u8>>::AllocatedMemory) -> bool {
+    self.0.attach_dictionary(dict)
+  }
+
+  // Attaches a serialized shared dictionary (magic 0x91 0x00, may contain an
+  // LZ77 prefix dictionary and custom word/transform lists); only allowed
+  // before the first write.
+  pub fn attach_serialized_dictionary(&mut self, dict: <StandardAlloc as Allocator<u8>>::AllocatedMemory) -> bool {
+    self.0.attach_serialized_dictionary(dict)
+  }
+
+  // Sets a decoder parameter (see BrotliState::set_parameter); only allowed
+  // before the first write.
+  pub fn set_parameter(&mut self, param: BrotliDecoderParameter, value: u32) -> bool {
+    self.0.set_parameter(param, value)
+  }
+
+  // Sets the smallest ring buffer the decoder starts from (see
+  // BrotliState::set_initial_ring_buffer_size); only allowed before the first
+  // write.
+  pub fn set_initial_ring_buffer_size(&mut self, size: u32) -> bool {
+    self.0.set_initial_ring_buffer_size(size)
+  }
+
   pub fn get_ref(&self) -> &W {
       self.0.get_ref()
   }
@@ -159,7 +199,7 @@ impl<W: Write> DecompressorWriter<W> {
   }
   pub fn new_with_custom_dictionary(w: W, buffer_size: usize, dict: <HeapAlloc<u8> as Allocator<u8>>::AllocatedMemory) -> Self {
     let mut alloc_u8 = HeapAlloc::<u8>::new(0);
-    let buffer = alloc_u8.alloc_cell(buffer_size);
+    let buffer = alloc_u8.alloc_cell(if buffer_size == 0 {4096} else {buffer_size});
     let alloc_u32 = HeapAlloc::<u32>::new(0);
     let alloc_hc = HeapAlloc::<HuffmanCode>::new(HuffmanCode{bits:2, value: 1});
     DecompressorWriter::<W>(DecompressorWriterCustomAlloc::<W,
@@ -169,6 +209,32 @@ impl<W: Write> DecompressorWriter<W> {
                                                 HeapAlloc<u32>,
                                                 HeapAlloc<HuffmanCode> >
       ::new_with_custom_dictionary(w, buffer, alloc_u8, alloc_u32, alloc_hc, dict))
+  }
+
+  // Attaches an additional raw LZ77 prefix dictionary; only allowed before
+  // the first write. Returns false if the dictionary could not be attached.
+  pub fn attach_dictionary(&mut self, dict: <HeapAlloc<u8> as Allocator<u8>>::AllocatedMemory) -> bool {
+    self.0.attach_dictionary(dict)
+  }
+
+  // Attaches a serialized shared dictionary (magic 0x91 0x00, may contain an
+  // LZ77 prefix dictionary and custom word/transform lists); only allowed
+  // before the first write.
+  pub fn attach_serialized_dictionary(&mut self, dict: <HeapAlloc<u8> as Allocator<u8>>::AllocatedMemory) -> bool {
+    self.0.attach_serialized_dictionary(dict)
+  }
+
+  // Sets a decoder parameter (see BrotliState::set_parameter); only allowed
+  // before the first write.
+  pub fn set_parameter(&mut self, param: BrotliDecoderParameter, value: u32) -> bool {
+    self.0.set_parameter(param, value)
+  }
+
+  // Sets the smallest ring buffer the decoder starts from (see
+  // BrotliState::set_initial_ring_buffer_size); only allowed before the first
+  // write.
+  pub fn set_initial_ring_buffer_size(&mut self, size: u32) -> bool {
+    self.0.set_initial_ring_buffer_size(size)
   }
 
   pub fn get_ref(&self) -> &W {
@@ -286,6 +352,32 @@ impl<ErrType,
            BrotliResult::ResultFailure => return self.error_if_invalid_data.take().map(|e|Err(e)).unwrap_or(Ok(()))
            }
         }
+    }
+
+    // Attaches an additional raw LZ77 prefix dictionary; only allowed before
+    // the first write. Returns false if the dictionary could not be attached.
+    pub fn attach_dictionary(&mut self, dict: AllocU8::AllocatedMemory) -> bool {
+      self.state.attach_dictionary(dict)
+    }
+
+    // Attaches a serialized shared dictionary (magic 0x91 0x00, may contain
+    // an LZ77 prefix dictionary and custom word/transform lists); only
+    // allowed before the first write.
+    pub fn attach_serialized_dictionary(&mut self, dict: AllocU8::AllocatedMemory) -> bool {
+      self.state.attach_serialized_dictionary(dict)
+    }
+
+    // Sets a decoder parameter (see BrotliState::set_parameter); only
+    // allowed before the first write.
+    pub fn set_parameter(&mut self, param: BrotliDecoderParameter, value: u32) -> bool {
+      self.state.set_parameter(param, value)
+    }
+
+    // Sets the smallest ring buffer the decoder starts from (see
+    // BrotliState::set_initial_ring_buffer_size); only allowed before the
+    // first write.
+    pub fn set_initial_ring_buffer_size(&mut self, size: u32) -> bool {
+      self.state.set_initial_ring_buffer_size(size)
     }
 
     pub fn get_ref(&self) -> &W {
