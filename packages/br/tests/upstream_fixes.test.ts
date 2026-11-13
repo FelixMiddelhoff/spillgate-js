@@ -311,8 +311,11 @@ test("Covers: SG-I-05 SG-R-CDC-08 - 8ed0d7d 677eef1: nonzero padding before a st
   for (const [name, bytes] of cases) {
     assert.equal(libbrotli(bytes).ok, false, name);
     for (const outcome of await everyWay(bytes)) assert.deepEqual([outcome.kind, outcome.length], ["corrupt", 0], name);
-    // 677eef1 only renames the error (PADDING_1 / PADDING_2): both are -15 here
-    assert.match(raw(fork, bytes, 1 << 30, 65536).message, /Error code -15$/, name);
+    // 677eef1 (in 6.x) splits the error: PADDING_1 is -14, PADDING_2 is -15; libbrotli is the oracle
+    const lib = libbrotli(bytes);
+    const expected = lib.ok ? "" : lib.code === "ERR_BROTLI_DECODER_ERROR_FORMAT_PADDING_1" ? "-14" : lib.code === "ERR_BROTLI_DECODER_ERROR_FORMAT_PADDING_2" ? "-15" : lib.code;
+    assert.match(expected, /^-1[45]$/, `${name}: libbrotli: ${lib.ok ? "ok" : lib.code}`);
+    assert.ok(raw(fork, bytes, 1 << 30, 65536).message.endsWith(`Error code ${expected}`), name);
   }
   // and the same shapes with zero padding are valid
   for (const bytes of [stream(16, (w) => { uncompressedBlock(w, hello); endOfStream(w); }), stream(16, (w) => { metadata(w, 0); endOfStream(w); })]) {

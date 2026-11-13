@@ -2,11 +2,18 @@
  * Differential tests of the forked WebAssembly decoder (see rust/NOTES.md): the decoder built from
  * this repository, the original `brotli-dec-wasm` 2.3.2 from npm (dev dependency, exact version) and
  * Node's libbrotli must agree. Original and fork: identical verdict, output, consumed input and
- * error message for every input, with ONE allowed difference: the fork backports upstream 693a4a1
- * (meta-block longer than MLEN) and 8ed0d7d (nonzero padding after the last meta-block), so it
- * refuses (error -9/-10/-15) streams the original accepts, and only when libbrotli refuses the same
- * stream with BLOCK_LENGTH_1/2 or PADDING_2. libbrotli: same output wherever the fork accepts a stream, and no
- * stream that libbrotli accepts may be refused by the fork.
+ * error message for every input, with the differences that brotli-decompressor 6.x (the fork is the
+ * unpatched 6.3.1, the original 2.3.2 contains 5.0.0) has on damaged streams, each one a strictness
+ * or error-code change that libbrotli confirms:
+ *  - the original accepts, the fork refuses with -10/-15 (upstream 693a4a1 meta-block longer than
+ *    MLEN, 8ed0d7d nonzero padding after the last meta-block); libbrotli refuses the same stream with
+ *    BLOCK_LENGTH_1/2 or PADDING_2;
+ *  - both refuse at the same input and output position with the same output, only the code differs:
+ *    -9/-7/-6 become -10 (the MLEN overshoot is noticed first; libbrotli: BLOCK_LENGTH_2) and -15
+ *    becomes -14 (677eef1 splits PADDING_1; libbrotli: PADDING_1, or WINDOW_BITS when it refuses the
+ *    large-window header of a random body before it gets there).
+ * libbrotli: same output wherever the fork accepts a stream, and no stream that libbrotli accepts
+ * may be refused by the fork.
  *
  * `SG_BR_NATIVE=<file URL of a brotli_dec_wasm.js>` runs the same tests against another build
  * (used to check the unpatched build of the fork against the original).
@@ -105,22 +112,33 @@ const stats = { compared: 0, success: 0, error: 0, truncated: 0, libbrotliRefuse
 const WHOLE: Array<[number, number]> = [[1 << 30, 65536]];
 const BOTH: Array<[number, number]> = [[1 << 30, 65536], [7, 33]];
 
+/** Allowed code changes (original > fork) of streams both refuse at the same place, and libbrotli's code for them. */
+const RENAMES: Record<string, RegExp> = {
+  "-9>-10": /BLOCK_LENGTH_2$/,
+  "-7>-10": /BLOCK_LENGTH_2$/,
+  "-6>-10": /BLOCK_LENGTH_2$/,
+  "-15>-14": /PADDING_1$|WINDOW_BITS$/,
+};
+
 /** Compare original, fork and libbrotli on one input, with the given (input step, output step) pairs. */
 function compare(input: Uint8Array, label: string, steps: Array<[number, number]> = BOTH): void {
   for (const [index, [inStep, outStep]] of steps.entries()) {
     const a = drive(original as unknown as Module, input, inStep, outStep);
     const b = drive(fork, input, inStep, outStep);
-    const sameKindOfError = a.verdict === "error" && b.verdict === "error" && b.message !== a.message && /Error code -(9|10|15)$/.test(b.message);
-    if (sameKindOfError) {
-      // both refuse it, the fork names the backported reason (the original noticed later, other code)
+    if (a.verdict === "error" && b.verdict === "error" && b.message !== a.message) {
+      // both refuse at the same place with the same output; only the code differs, from a fixed list
       assert.deepEqual({ ...b, message: "" }, { ...a, message: "" }, `${label}: the fork refuses at another place or with another output`);
-      assert.match(libbrotliCode(input), /BLOCK_LENGTH_[12]|PADDING_[12]/, `${label}: libbrotli: ${libbrotliCode(input)}`);
+      const code = (m: string): string | undefined => /(-[0-9]+)$/.exec(m)?.[1];
+      const pair = `${code(a.message)}>${code(b.message)}`;
+      const allowed = RENAMES[pair];
+      assert.ok(allowed !== undefined, `${label}: the error code changed in a way that is not listed: ${pair}`);
+      assert.match(libbrotliCode(input), allowed, `${label}: ${pair}, libbrotli: ${libbrotliCode(input)}`);
       stats.backported++;
       continue;
     }
     if (a.verdict === "success" && b.verdict === "error") {
       // the only allowed difference: a stream refused for the two backported reasons
-      assert.match(b.message, /Error code -(9|10|15)$/, `${label}: the fork refuses a stream the original accepts, for another reason`);
+      assert.match(b.message, /Error code -(10|15)$/, `${label}: the fork refuses a stream the original accepts, for another reason`);
       assert.match(libbrotliCode(input.subarray(0, a.consumed)), /BLOCK_LENGTH_[12]|PADDING_2/, `${label}: libbrotli does not refuse it for the same reason`);
       assert.ok(b.consumed <= a.consumed, label);
       stats.backported++;

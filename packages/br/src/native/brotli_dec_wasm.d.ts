@@ -116,6 +116,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly brotli_dec: (a: number, b: number) => [number, number, number, number];
+    readonly decompress: (a: number, b: number) => [number, number, number, number];
     readonly __wbg_brotlidecstream_free: (a: number, b: number) => void;
     readonly __wbg_brotlistreamresult_free: (a: number, b: number) => void;
     readonly __wbg_decompressstream_free: (a: number, b: number) => void;
@@ -125,7 +127,6 @@ export interface InitOutput {
     readonly __wbg_set_brotlistreamresult_buf: (a: number, b: number, c: number) => void;
     readonly __wbg_set_brotlistreamresult_code: (a: number, b: number) => void;
     readonly __wbg_set_brotlistreamresult_input_offset: (a: number, b: number) => void;
-    readonly brotli_dec: (a: number, b: number) => [number, number, number, number];
     readonly brotlidecstream_dec: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly brotlidecstream_decompress: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly brotlidecstream_new: () => number;
@@ -133,7 +134,6 @@ export interface InitOutput {
     readonly decompressstream_decompress: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly decompressstream_new: () => number;
     readonly decompressstream_total_out: (a: number) => number;
-    readonly decompress: (a: number, b: number) => [number, number, number, number];
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

@@ -250,9 +250,10 @@ test("Covers: SG-R-RDR-01 SG-I-09 - a source error late in the stream gives the 
 
 test("Covers: SG-R-CDC-04 SG-R-LAY-02 - CPU of many tiny hostile meta-blocks with 256 literal and 256 distance prefix codes each stays linear and below the original decoder (F3)", async () => {
   // 4000 meta-blocks of one byte each, 716 input bytes each (2.9 MB in all). The original decoder
-  // (brotli-dec-wasm 2.3.2) allocated and cleared 1.1 MB of table memory per meta-block: 1.59 s,
-  // about 555 ns per input byte. The fork keeps the table memory between meta-blocks: 0.66 s,
-  // about 230 ns per input byte (best of three on the author's machine, 2026-11-12, no wasm-opt).
+  // (brotli-dec-wasm 2.3.2, brotli-decompressor 5.0.0) allocated and cleared 1.1 MB of table memory
+  // per meta-block: 1.6 s, about 565 ns per input byte. The fork (unpatched brotli-decompressor
+  // 6.3.1, which grows its tables on demand) needs 0.35 s, about 122 ns per input byte (best of
+  // five on the author's machine, 2026-11-13, no wasm-opt); the original is the slow side here.
   // What is left is the work of reading the trees themselves, linear in the input. Neither the
   // ratio nor the output limit bounds it (4000 bytes out); only maxInput and the caller's
   // AbortSignal do.
@@ -278,10 +279,11 @@ test("Covers: SG-R-CDC-04 SG-R-LAY-02 - CPU of many tiny hostile meta-blocks wit
     originalMs = Math.min(originalMs, await originalOnce(stream));
   }
   const nsPerByte = (ms * 1e6) / stream.length;
-  // absolute: 2.5 times the measurement (the unpatched build measures 555 ns per byte here)
-  assert.ok(nsPerByte < 600, `${ms.toFixed(0)} ms for ${stream.length} input bytes (${nsPerByte.toFixed(0)} ns per byte)`);
-  // relative to the original decoder in the same process: at least 1.5 times faster (measured 2.4)
-  assert.ok(ms * 1.5 < originalMs, `fork ${ms.toFixed(0)} ms, original ${originalMs.toFixed(0)} ms`);
+  // absolute: 2.5 times the measurement (the original measures 565 ns per byte here, so this
+  // bound also fails for it)
+  assert.ok(nsPerByte < 300, `${ms.toFixed(0)} ms for ${stream.length} input bytes (${nsPerByte.toFixed(0)} ns per byte)`);
+  // relative to the original decoder in the same process: at least 3 times faster (measured 4.6)
+  assert.ok(ms * 3 < originalMs, `fork ${ms.toFixed(0)} ms, original ${originalMs.toFixed(0)} ms`);
   // linear: a quarter of the stream costs about a quarter (generous factor 2 for noise and warm-up)
   const quarter = hostileBrotli(1000, "single", true);
   const quarterStarted = performance.now();
@@ -295,8 +297,9 @@ test("Covers: SG-R-CDC-04 SG-R-LAY-02 - CPU of many tiny hostile meta-blocks wit
 });
 
 test("Covers: SG-R-CDC-04 SG-R-LAY-02 - meta-blocks with 256 literal block types (16 KiB context map each) cost no more per byte than the tree shape (F3)", async () => {
-  // measured 130 ns per input byte, with and without the distance side (reusing the map memory
-  // between meta-blocks was tried and measured no faster: the allocation is not the cost)
+  // measured 115 ns per input byte (original 5.0.0: 200), with and without the distance side
+  // (reusing the map memory between meta-blocks was tried and measured no faster: the allocation
+  // is not the cost)
   for (const dist of [false, true]) {
     const stream = hostileBlockTypes(4000, dist);
     assert.equal(zlib.brotliDecompressSync(stream).length, 4000, "the stream is valid");
@@ -304,6 +307,6 @@ test("Covers: SG-R-CDC-04 SG-R-LAY-02 - meta-blocks with 256 literal block types
     const [kind, out] = await run(stream, "br", { maxOutput: 1 << 20, disableRatioLimit: true });
     const ns = ((performance.now() - started) * 1e6) / stream.length;
     assert.deepEqual([kind, out.length], ["ok", 4000]);
-    assert.ok(ns < 600, `${ns.toFixed(0)} ns per input byte (dist ${dist})`);
+    assert.ok(ns < 300, `${ns.toFixed(0)} ns per input byte (dist ${dist})`);
   }
 });
